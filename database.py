@@ -94,57 +94,39 @@ def init_db():
 # ---------------------------- Пользователи ----------------------------
 
 def add_user(user_id: str, username: str = None):
-    """Добавляет пользователя, если его ещё нет."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)
-    """, (user_id, username))
+    cur.execute("INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)", (user_id, username))
     conn.commit()
     conn.close()
 
 def get_user(user_id: str):
-    """Возвращает данные пользователя или None."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
     row = cur.fetchone()
     conn.close()
     if row:
-        return {
-            "id": row[0],
-            "username": row[1],
-            "created_at": row[2],
-            "plan": row[3],
-            "plan_expires": row[4]
-        }
+        return {"id": row[0], "username": row[1], "created_at": row[2], "plan": row[3], "plan_expires": row[4]}
     return None
 
 def update_user_plan(user_id: str, plan: str, expires_date: str = None):
-    """Обновляет тариф пользователя (например, при активации промокода)."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE users SET plan = ?, plan_expires = ? WHERE id = ?
-    """, (plan, expires_date, user_id))
+    cur.execute("UPDATE users SET plan = ?, plan_expires = ? WHERE id = ?", (plan, expires_date, user_id))
     conn.commit()
     conn.close()
 
 # ---------------------------- Каналы ----------------------------
 
 def add_channel(chat_id: str, owner_id: str, title: str, username: str = None):
-    """Добавляет канал в базу (неверифицированный)."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT OR REPLACE INTO channels (id, owner_id, title, username, verified)
-        VALUES (?, ?, ?, ?, 0)
-    """, (chat_id, owner_id, title, username))
+    cur.execute("INSERT OR REPLACE INTO channels (id, owner_id, title, username, verified) VALUES (?, ?, ?, ?, 0)", (chat_id, owner_id, title, username))
     conn.commit()
     conn.close()
 
 def verify_channel(chat_id: str):
-    """Помечает канал как верифицированный."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("UPDATE channels SET verified = 1 WHERE id = ?", (chat_id,))
@@ -152,117 +134,136 @@ def verify_channel(chat_id: str):
     conn.close()
 
 def get_user_channels(owner_id: str):
-    """Возвращает список каналов пользователя."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT * FROM channels WHERE owner_id = ?", (owner_id,))
     rows = cur.fetchall()
     conn.close()
-    channels = []
-    for row in rows:
-        channels.append({
-            "id": row[0],
-            "owner_id": row[1],
-            "title": row[2],
-            "username": row[3],
-            "verified": row[4],
-            "connected_at": row[5]
-        })
-    return channels
+    return [{"id": r[0], "owner_id": r[1], "title": r[2], "username": r[3], "verified": r[4], "connected_at": r[5]} for r in rows]
 
 # ---------------------------- Посты ----------------------------
 
-def add_post(channel_id: str, content: str, media_type: str = None,
-             media_file_id: str = None, status: str = "posted"):
-    """Сохраняет пост в базу."""
+def add_post(channel_id: str, content: str, media_type: str = None, media_file_id: str = None, status: str = "posted"):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO posts (channel_id, content, media_type, media_file_id, status)
-        VALUES (?, ?, ?, ?, ?)
-    """, (channel_id, content, media_type, media_file_id, status))
+    cur.execute("INSERT INTO posts (channel_id, content, media_type, media_file_id, status) VALUES (?, ?, ?, ?, ?)", (channel_id, content, media_type, media_file_id, status))
     conn.commit()
     conn.close()
+
+# ---------------------------- Платежи ----------------------------
+
+def add_payment(user_id: str, channel_id: str, amount: float, purpose: str, payment_link_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO payments (user_id, channel_id, amount, purpose, payment_link_id, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)", (user_id, channel_id, amount, purpose, payment_link_id))
+    conn.commit()
+    conn.close()
+
+def update_payment_status(payment_link_id: str, status: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE payments SET status = ? WHERE payment_link_id = ?", (status, payment_link_id))
+    conn.commit()
+    conn.close()
+
+def get_payment_by_link_id(payment_link_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM payments WHERE payment_link_id = ?", (payment_link_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {"id": row[0], "user_id": row[1], "channel_id": row[2], "amount": row[3], "purpose": row[4], "status": row[5], "payment_link_id": row[6], "created_at": row[7]}
+    return None
+
+# ---------------------------- Подписчики ----------------------------
+
+def add_subscriber(channel_id: str, user_id: str, expires_at: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO subscribers (channel_id, user_id, expires_at, status) VALUES (?, ?, ?, 'active')", (channel_id, user_id, expires_at))
+    conn.commit()
+    conn.close()
+
+def get_active_subscribers(channel_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, expires_at FROM subscribers WHERE channel_id = ? AND status = 'active' AND expires_at > datetime('now')", (channel_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"user_id": r[0], "expires_at": r[1]} for r in rows]
+
+def get_expired_subscribers():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id, user_id FROM subscribers WHERE status = 'active' AND expires_at <= datetime('now')")
+    rows = cur.fetchall()
+    conn.close()
+    return [{"channel_id": r[0], "user_id": r[1]} for r in rows]
+
+def mark_subscriber_expired(channel_id: str, user_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE subscribers SET status = 'expired' WHERE channel_id = ? AND user_id = ?", (channel_id, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_subscription(user_id: str, channel_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT expires_at FROM subscribers WHERE user_id = ? AND channel_id = ? AND status = 'active' AND expires_at > datetime('now')", (user_id, channel_id))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 # ---------------------------- Промокоды ----------------------------
 
 def add_promocode(code: str, plan: str, duration_days: int, uses_left: int, created_by: str):
-    """Создаёт новый промокод."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO promocodes (code, plan, duration_days, uses_left, created_by)
-        VALUES (?, ?, ?, ?, ?)
-    """, (code, plan, duration_days, uses_left, created_by))
+    cur.execute("INSERT INTO promocodes (code, plan, duration_days, uses_left, created_by) VALUES (?, ?, ?, ?, ?)", (code, plan, duration_days, uses_left, created_by))
     conn.commit()
     conn.close()
 
 def get_promocode(code: str):
-    """Возвращает данные промокода или None."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT * FROM promocodes WHERE code = ?", (code,))
     row = cur.fetchone()
     conn.close()
     if row:
-        return {
-            "id": row[0],
-            "code": row[1],
-            "plan": row[2],
-            "duration_days": row[3],
-            "uses_left": row[4],
-            "created_by": row[5]
-        }
+        return {"id": row[0], "code": row[1], "plan": row[2], "duration_days": row[3], "uses_left": row[4], "created_by": row[5]}
     return None
 
 def activate_promocode(code: str, user_id: str):
-    """
-    Активирует промокод для пользователя.
-    Возвращает (успех, сообщение).
-    """
     promo = get_promocode(code)
     if not promo:
         return False, "Промокод не найден."
-
     if promo["uses_left"] <= 0:
         return False, "Промокод уже использован."
-
-    # Вычисляем дату окончания подписки
     expires = (datetime.now() + timedelta(days=promo["duration_days"])).strftime("%Y-%m-%d")
-
-    # Обновляем пользователя
     update_user_plan(user_id, promo["plan"], expires)
-
-    # Уменьшаем количество использований
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("UPDATE promocodes SET uses_left = uses_left - 1 WHERE code = ?", (code,))
     conn.commit()
     conn.close()
-
     return True, f"Промокод активирован! Ваш тариф: {promo['plan']} до {expires}."
 
 # ---------------------------- Лимиты ----------------------------
 
 def check_limits(user_id: str):
-    """
-    Проверяет лимиты пользователя.
-    Возвращает словарь с текущими лимитами и количеством использованных.
-    """
     user = get_user(user_id)
     if not user:
-        # Пользователь не найден — создаём с тарифом free
         add_user(user_id)
         user = get_user(user_id)
 
-    # Лимиты по тарифу
     limits = {
         "free": {"channels": 1, "posts": 10},
         "pro": {"channels": 5, "posts": 100},
         "premium": {"channels": 20, "posts": 999999}
     }
 
-    # Если план не определён или не в списке — ставим free
     plan = user.get("plan", "free")
     if plan not in limits:
         plan = "free"
@@ -281,99 +282,3 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
-
-def update_payment_status(payment_link_id: str, status: str):
-    """Обновляет статус платежа по payment_link_id."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE payments SET status = ? WHERE payment_link_id = ?
-    """, (status, payment_link_id))
-    conn.commit()
-    conn.close()
-
-
-def get_payment_by_link_id(payment_link_id: str):
-    """Возвращает платёж по payment_link_id."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM payments WHERE payment_link_id = ?", (payment_link_id,))
-    row = cur.fetchone()
-    conn.close()
-    if row:
-        return {
-            "id": row[0],
-            "user_id": row[1],
-            "channel_id": row[2],
-            "amount": row[3],
-            "purpose": row[4],
-            "status": row[5],
-            "payment_link_id": row[6],
-            "created_at": row[7]
-        }
-    return None
-
-
-# ---------------------------- Подписчики ----------------------------
-
-def add_subscriber(channel_id: str, user_id: str, expires_at: str):
-    """Добавляет или обновляет подписчика канала."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT OR REPLACE INTO subscribers (channel_id, user_id, expires_at, status)
-        VALUES (?, ?, ?, 'active')
-    """, (channel_id, user_id, expires_at))
-    conn.commit()
-    conn.close()
-
-
-def get_active_subscribers(channel_id: str):
-    """Возвращает активных подписчиков канала."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT user_id, expires_at FROM subscribers
-        WHERE channel_id = ? AND status = 'active' AND expires_at > datetime('now')
-    """, (channel_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return [{"user_id": row[0], "expires_at": row[1]} for row in rows]
-
-
-def get_expired_subscribers():
-    """Возвращает всех подписчиков с истёкшей подпиской."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT channel_id, user_id FROM subscribers
-        WHERE status = 'active' AND expires_at <= datetime('now')
-    """)
-    rows = cur.fetchall()
-    conn.close()
-    return [{"channel_id": row[0], "user_id": row[1]} for row in rows]
-
-
-def mark_subscriber_expired(channel_id: str, user_id: str):
-    """Помечает подписку как истёкшую."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE subscribers SET status = 'expired'
-        WHERE channel_id = ? AND user_id = ?
-    """, (channel_id, user_id))
-    conn.commit()
-    conn.close()
-
-
-def get_user_subscription(user_id: str, channel_id: str):
-    """Проверяет активную подписку пользователя на канал."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT expires_at FROM subscribers
-        WHERE user_id = ? AND channel_id = ? AND status = 'active' AND expires_at > datetime('now')
-    """, (user_id, channel_id))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else None

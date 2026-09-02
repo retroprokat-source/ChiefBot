@@ -232,6 +232,23 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_keyboard())
 
+@router.message(Command("my_channels"))
+async def cmd_my_channels(message: Message):
+    """Показывает подключённые каналы."""
+    user_id = str(message.from_user.id)
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("У вас нет подключённых каналов.")
+        return
+    
+    text = "Ваши каналы:\n\n"
+    for ch in channels:
+        status = "✅" if ch["verified"] else "❌"
+        text += f"{status} {ch['title']} (id: {ch['id']})\n"
+    
+    await message.answer(text)
+
 # ---------------------------- Подписка на канал ----------------------------
 @router.message(Command("subscribe"))
 async def cmd_subscribe(message: Message):

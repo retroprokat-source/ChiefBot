@@ -69,40 +69,36 @@ def create_payment_link(user_id: str, channel_id: str, amount: str, purpose: str
 
 
 def setup_webhook():
-    """Регистрирует вебхук в Точке."""
+    """Обновляет вебхук Точки."""
     url = f"https://enter.tochka.com/uapi/webhook/v1.0/{config.TOCHKA_CLIENT_ID}"
-    payload = {
-        "webhooksList": ["acquiringInternetPayment"],
-        "url": "https://chiefbot.onrender.com/webhook/tochka"
-    }
+    
     headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Authorization': f'Bearer {config.TOCHKA_API_TOKEN}'
     }
-
+    
+    payload = {
+        "webhooksList": ["acquiringInternetPayment"],
+        "url": "https://chiefbot.onrender.com/webhook/tochka"
+    }
+    
     try:
-        response = requests.put(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
+        # Удаляем старый вебхук
+        response = requests.delete(url, headers=headers, timeout=15, verify=CERT_FILE)
+        logging.info(f"DELETE: {response.status_code}")
+        
+        # Создаём новый
+        response = requests.post(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
+        logging.info(f"POST: {response.status_code} {response.text[:300]}")
+        
         if response.status_code == 200:
-            logging.info("✅ Вебхук Точки зарегистрирован")
+            logging.info("✅ Вебхук ChiefBot зарегистрирован")
             return True
         else:
-            logging.error(f"❌ Ошибка регистрации вебхука: {response.status_code} {response.text}")
+            logging.error(f"❌ Ошибка: {response.status_code} {response.text}")
             return False
+            
     except Exception as e:
-        logging.error(f"❌ Ошибка подключения к Точке: {e}")
+        logging.error(f"❌ Ошибка: {e}")
         return False
-
-
-def process_webhook(raw_body: str) -> dict:
-    """Декодирует JWT-вебхук от Точки."""
-    try:
-        parts = raw_body.split('.')
-        if len(parts) < 2:
-            return {}
-        payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
-        decoded = base64.b64decode(payload_b64).decode('utf-8')
-        return json.loads(decoded)
-    except Exception as e:
-        logging.error(f"❌ Ошибка декодирования вебхука: {e}")
-        return {}

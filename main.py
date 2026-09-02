@@ -11,6 +11,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 import os
+from flask import Flask, request
+import services.payments as payments_service
 import config
 import database as db
 
@@ -27,6 +29,23 @@ def home():
 def run_flask():
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+@app.route('/webhook/tochka', methods=['POST'])
+def tochka_webhook():
+    raw_body = request.get_data(as_text=True)
+    webhook_data = payments_service.process_webhook(raw_body)
+
+    if webhook_data:
+        amount = webhook_data.get("amount", 0)
+        purpose = webhook_data.get("purpose", "")
+        payment_link_id = webhook_data.get("paymentLinkId", "")
+        status = webhook_data.get("status", "")
+
+        if status == "success":
+            db.update_payment_status(payment_link_id, "paid")
+            print(f"✅ Платёж получен: {amount} ₽ — {purpose}")
+
+    return "OK", 200
 
 # ---------------------------- Инициализация бота и диспетчера ----------------------------
 bot = Bot(token=config.BOT_TOKEN)

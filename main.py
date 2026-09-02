@@ -328,7 +328,6 @@ async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
 async def process_schedule_time(message: Message, state: FSMContext):
     """Обработка времени для отложенного постинга."""
     from datetime import datetime
-    import services.scheduler as scheduler_service
     
     try:
         scheduled_dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")

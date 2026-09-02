@@ -62,6 +62,7 @@ def init_db():
             amount REAL,
             purpose TEXT,
             status TEXT DEFAULT 'pending',
+            payment_link_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -272,3 +273,113 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
+
+# ---------------------------- Платежи ----------------------------
+
+def add_payment(user_id: str, channel_id: str, amount: float, purpose: str, payment_link_id: str):
+    """Добавляет платёж в БД."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO payments (user_id, channel_id, amount, purpose, payment_link_id, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
+    """, (user_id, channel_id, amount, purpose, payment_link_id))
+    conn.commit()
+    conn.close()
+
+
+def update_payment_status(payment_link_id: str, status: str):
+    """Обновляет статус платежа по payment_link_id."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE payments SET status = ? WHERE payment_link_id = ?
+    """, (status, payment_link_id))
+    conn.commit()
+    conn.close()
+
+
+def get_payment_by_link_id(payment_link_id: str):
+    """Возвращает платёж по payment_link_id."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM payments WHERE payment_link_id = ?", (payment_link_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "channel_id": row[2],
+            "amount": row[3],
+            "purpose": row[4],
+            "status": row[5],
+            "payment_link_id": row[6],
+            "created_at": row[7]
+        }
+    return None
+
+
+# ---------------------------- Подписчики ----------------------------
+
+def add_subscriber(channel_id: str, user_id: str, expires_at: str):
+    """Добавляет или обновляет подписчика канала."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO subscribers (channel_id, user_id, expires_at, status)
+        VALUES (?, ?, ?, 'active')
+    """, (channel_id, user_id, expires_at))
+    conn.commit()
+    conn.close()
+
+
+def get_active_subscribers(channel_id: str):
+    """Возвращает активных подписчиков канала."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT user_id, expires_at FROM subscribers
+        WHERE channel_id = ? AND status = 'active' AND expires_at > datetime('now')
+    """, (channel_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"user_id": row[0], "expires_at": row[1]} for row in rows]
+
+
+def get_expired_subscribers():
+    """Возвращает всех подписчиков с истёкшей подпиской."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT channel_id, user_id FROM subscribers
+        WHERE status = 'active' AND expires_at <= datetime('now')
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [{"channel_id": row[0], "user_id": row[1]} for row in rows]
+
+
+def mark_subscriber_expired(channel_id: str, user_id: str):
+    """Помечает подписку как истёкшую."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE subscribers SET status = 'expired'
+        WHERE channel_id = ? AND user_id = ?
+    """, (channel_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_subscription(user_id: str, channel_id: str):
+    """Проверяет активную подписку пользователя на канал."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT expires_at FROM subscribers
+        WHERE user_id = ? AND channel_id = ? AND status = 'active' AND expires_at > datetime('now')
+    """, (user_id, channel_id))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None

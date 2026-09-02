@@ -69,7 +69,7 @@ def create_payment_link(user_id: str, channel_id: str, amount: str, purpose: str
 
 
 def setup_webhook():
-    """Обновляет вебхук Точки."""
+    """Регистрирует вебхук Точки."""
     url = f"https://enter.tochka.com/uapi/webhook/v1.0/{config.TOCHKA_CLIENT_ID}"
     
     headers = {
@@ -84,13 +84,8 @@ def setup_webhook():
     }
     
     try:
-        # Удаляем старый вебхук
-        response = requests.delete(url, headers=headers, timeout=15, verify=CERT_FILE)
-        logging.info(f"DELETE: {response.status_code}")
-        
-        # Создаём новый
-        response = requests.post(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
-        logging.info(f"POST: {response.status_code} {response.text[:300]}")
+        response = requests.put(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
+        logging.info(f"PUT: {response.status_code} {response.text[:300]}")
         
         if response.status_code == 200:
             logging.info("✅ Вебхук ChiefBot зарегистрирован")

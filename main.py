@@ -10,6 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import sqlite3
 import os
 from flask import Flask, request
 import services.payments as payments_service
@@ -248,6 +249,39 @@ async def cmd_my_channels(message: Message):
         text += f"{status} {ch['title']} (id: {ch['id']})\n"
     
     await message.answer(text)
+
+@router.message(Command("delete_channel"))
+async def cmd_delete_channel(message: Message):
+    """Удаляет канал."""
+    user_id = str(message.from_user.id)
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("У вас нет каналов.")
+        return
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=ch["title"], 
+            callback_data=f"delete_channel:{ch['id']}"
+        )]
+        for ch in channels
+    ])
+    await message.answer("Выберите канал для удаления:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("delete_channel:"))
+async def delete_channel_callback(callback: CallbackQuery):
+    channel_id = callback.data.split(":")[1]
+    # Удаление из БД
+    conn = sqlite3.connect(db.DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+    conn.commit()
+    conn.close()
+    
+    await callback.message.answer("✅ Канал удалён.")
+    await callback.answer()
 
 # ---------------------------- Подписка на канал ----------------------------
 @router.message(Command("subscribe"))

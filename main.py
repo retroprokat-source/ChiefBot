@@ -346,11 +346,22 @@ async def cmd_subscribe(message: Message):
     
     if len(channels) == 1:
         channel_id = channels[0]["id"]
+        channel_title = channels[0]["title"]
+        
+        # Проверяем, есть ли уже активная подписка
+        existing = db.get_user_subscription(user_id, channel_id)
+        if existing:
+            await message.answer(
+                f"✅ У вас уже есть активная подписка на канал «{channel_title}».\n"
+                f"Действует до: {existing}"
+            )
+            return
+        
         payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
         
         if payment_url:
             await message.answer(
-                f"💳 Подписка на канал «{channels[0]['title']}»\n"
+                f"💳 Подписка на канал «{channel_title}»\n"
                 f"Цена: 1 ₽\n"
                 f"Длительность: 30 дней\n\n"
                 f"Оплатите по ссылке:\n{payment_url}"

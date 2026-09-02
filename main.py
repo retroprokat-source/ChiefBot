@@ -122,6 +122,7 @@ class AddChannel(StatesGroup):
 class NewPost(StatesGroup):
     waiting_for_content = State()
     waiting_for_channel = State()
+    waiting_for_time = State()
 
 class PromoCreate(StatesGroup):
     waiting_for_code = State()
@@ -213,16 +214,20 @@ async def process_forwarded_message(message: Message, state: FSMContext):
 # ---------------------------- Создание поста ----------------------------
 @router.message(F.text == "📝 Новый пост")
 async def new_post_start(message: Message, state: FSMContext):
-    """Начало создания нового поста."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="post_now")],
+        [InlineKeyboardButton(text="⏰ Запланировать", callback_data="post_schedule")]
+    ])
     await message.answer(
         "Отправьте текст поста. Если нужно прикрепить фото, отправьте его вместе с текстом в одном сообщении.\n"
-        "Для отмены нажмите /cancel."
+        "Для отмены нажмите /cancel.",
+        reply_markup=keyboard
     )
     await state.set_state(NewPost.waiting_for_content)
 
 @router.message(NewPost.waiting_for_content)
 async def process_post_content(message: Message, state: FSMContext):
-    """Получение контента поста и выбор канала."""
+    """Получение контента поста."""
     content = message.text or message.caption or ""
     media_type = None
     media_file_id = None
@@ -247,7 +252,12 @@ async def process_post_content(message: Message, state: FSMContext):
         return
 
     if len(channels) == 1:
-        await publish_post(message, state, channels[0]["id"])
+        await state.update_data(channel_id=channels[0]["id"])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="post_now")],
+            [InlineKeyboardButton(text="⏰ Запланировать", callback_data="post_schedule")]
+        ])
+        await message.answer("Выберите действие:", reply_markup=keyboard)
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=ch["title"], callback_data=f"select_channel:{ch['id']}")]

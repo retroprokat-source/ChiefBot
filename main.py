@@ -34,17 +34,21 @@ def run_flask():
 @app.route('/webhook/tochka', methods=['POST'])
 def tochka_webhook():
     raw_body = request.get_data(as_text=True)
+    logging.info(f"🔔 Вебхук получен: {raw_body[:500]}")
+    
     webhook_data = payments_service.process_webhook(raw_body)
+    logging.info(f"📦 Декодированные данные: {json.dumps(webhook_data, ensure_ascii=False)[:500]}")
 
     if webhook_data:
         amount = webhook_data.get("amount", 0)
         purpose = webhook_data.get("purpose", "")
         payment_link_id = webhook_data.get("paymentLinkId", "")
         status = webhook_data.get("status", "")
+        payment_status = webhook_data.get("paymentStatus", "")
+        
+        logging.info(f"Статус: {status}, paymentStatus: {payment_status}, paymentLinkId: {payment_link_id}")
 
-        logging.info(f"Вебхук получен: status={status}, paymentLinkId={payment_link_id}")
-
-        if status == "success" or status == "confirmed" or status == "paid":
+        if status in ("success", "confirmed", "paid") or payment_status in ("success", "confirmed", "paid", "SUCCESS", "CONFIRMED", "PAID"):
             db.update_payment_status(payment_link_id, "paid")
             
             payment = db.get_payment_by_link_id(payment_link_id)
@@ -52,7 +56,6 @@ def tochka_webhook():
                 user_id = payment["user_id"]
                 channel_id = payment["channel_id"]
                 
-                # Активируем подписку
                 if channel_id:
                     subscriptions_service.activate_subscription(user_id, channel_id)
                     logging.info(f"✅ Подписка активирована для user={user_id}, channel={channel_id}")
@@ -60,6 +63,8 @@ def tochka_webhook():
                     logging.error(f"❌ Нет channel_id в платеже {payment_link_id}")
             else:
                 logging.error(f"❌ Платёж не найден: {payment_link_id}")
+        else:
+            logging.warning(f"⚠️ Неизвестный статус: {status}, paymentStatus: {payment_status}")
 
     return "OK", 200
 

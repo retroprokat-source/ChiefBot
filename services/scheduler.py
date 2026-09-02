@@ -48,3 +48,49 @@ async def run_scheduler():
     while True:
         await check_expired_subscriptions()
         await asyncio.sleep(3600)  # Проверка каждый час
+
+async def schedule_post(channel_id: str, content: str, media_type: str, media_file_id: str, scheduled_at):
+    """Планирует пост на указанное время."""
+    from datetime import datetime
+    import config
+    
+    delay = (scheduled_at - datetime.now()).total_seconds()
+    
+    if delay < 0:
+        delay = 0
+    
+    async def publish():
+        await asyncio.sleep(delay)
+        try:
+            import requests as r
+            
+            if media_type == "photo":
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendPhoto"
+                data = {
+                    "chat_id": int(channel_id),
+                    "photo": media_file_id,
+                    "caption": content
+                }
+            elif media_type == "video":
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendVideo"
+                data = {
+                    "chat_id": int(channel_id),
+                    "video": media_file_id,
+                    "caption": content
+                }
+            else:
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+                data = {
+                    "chat_id": int(channel_id),
+                    "text": content
+                }
+            
+            response = r.post(url, json=data)
+            if response.status_code == 200:
+                logging.info(f"✅ Отложенный пост опубликован в {channel_id}")
+            else:
+                logging.error(f"❌ Ошибка публикации: {response.text}")
+        except Exception as e:
+            logging.error(f"❌ Ошибка: {e}")
+    
+    asyncio.create_task(publish())

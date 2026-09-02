@@ -1,8 +1,10 @@
 # main.py
 import asyncio
 import logging
+import sqlite3
+import os
 from threading import Thread
-from flask import Flask
+from flask import Flask, request
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -10,12 +12,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
-import sqlite3
-import os
-from flask import Flask, request
-import services.payments as payments_service
 import config
 import database as db
+import services.payments as payments_service
 import services.subscriptions as subscriptions_service
 
 # ---------------------------- Настройка логирования ----------------------------
@@ -45,17 +44,13 @@ def tochka_webhook():
 
         if status == "success" or status == "confirmed":
             db.update_payment_status(payment_link_id, "paid")
-            
-            # Находим платёж в БД
             payment = db.get_payment_by_link_id(payment_link_id)
             if payment:
                 user_id = payment["user_id"]
-                # Активируем подписку
-                # Пока просто логируем
                 print(f"✅ Платёж получен: {amount} ₽ — {purpose} от {user_id}")
 
     return "OK", 200
-    
+
 # ---------------------------- Инициализация бота и диспетчера ----------------------------
 bot = Bot(token=config.BOT_TOKEN)
 storage = MemoryStorage()
@@ -83,6 +78,7 @@ def main_keyboard():
     buttons = [
         [KeyboardButton(text="➕ Добавить канал")],
         [KeyboardButton(text="📝 Новый пост")],
+        [KeyboardButton(text="💳 Подписка")],
         [KeyboardButton(text="🎁 Промокод")],
         [KeyboardButton(text="💬 Сообщество админов")]
     ]
@@ -100,6 +96,12 @@ async def cmd_start(message: Message):
         "Выберите действие в меню ниже:",
         reply_markup=main_keyboard()
     )
+
+# ---------------------------- Кнопка Подписка ----------------------------
+@router.message(F.text == "💳 Подписка")
+async def subscribe_button(message: Message):
+    """Обработка кнопки Подписка."""
+    await cmd_subscribe(message)
 
 # ---------------------------- Добавление канала ----------------------------
 @router.message(F.text == "➕ Добавить канал")
@@ -221,7 +223,6 @@ async def publish_post(message: Message, state: FSMContext, channel_id: str):
 
 @router.callback_query(NewPost.waiting_for_channel, F.data.startswith("select_channel:"))
 async def select_channel_callback(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора канала из инлайн-кнопок."""
     channel_id = callback.data.split(":")[1]
     await callback.answer()
     await publish_post(callback.message, state, channel_id)
@@ -229,13 +230,12 @@ async def select_channel_callback(callback: CallbackQuery, state: FSMContext):
 # ---------------------------- Команда /cancel ----------------------------
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
-    """Отмена текущего действия."""
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_keyboard())
 
+# ---------------------------- Мои каналы ----------------------------
 @router.message(Command("my_channels"))
 async def cmd_my_channels(message: Message):
-    """Показывает подключённые каналы."""
     user_id = str(message.from_user.id)
     channels = db.get_user_channels(user_id)
     
@@ -250,9 +250,9 @@ async def cmd_my_channels(message: Message):
     
     await message.answer(text)
 
+# ---------------------------- Удаление канала ----------------------------
 @router.message(Command("delete_channel"))
 async def cmd_delete_channel(message: Message):
-    """Удаляет канал."""
     user_id = str(message.from_user.id)
     channels = db.get_user_channels(user_id)
     
@@ -261,19 +261,14 @@ async def cmd_delete_channel(message: Message):
         return
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=ch["title"], 
-            callback_data=f"delete_channel:{ch['id']}"
-        )]
+        [InlineKeyboardButton(text=ch["title"], callback_data=f"delete_channel:{ch['id']}")]
         for ch in channels
     ])
     await message.answer("Выберите канал для удаления:", reply_markup=keyboard)
 
-
 @router.callback_query(F.data.startswith("delete_channel:"))
 async def delete_channel_callback(callback: CallbackQuery):
     channel_id = callback.data.split(":")[1]
-    # Удаление из БД
     conn = sqlite3.connect(db.DB_PATH)
     cur = conn.cursor()
     cur.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
@@ -286,10 +281,7 @@ async def delete_channel_callback(callback: CallbackQuery):
 # ---------------------------- Подписка на канал ----------------------------
 @router.message(Command("subscribe"))
 async def cmd_subscribe(message: Message):
-    """Команда для подписки на канал."""
     user_id = str(message.from_user.id)
-    
-    # Получаем каналы пользователя
     channels = db.get_user_channels(user_id)
     
     if not channels:
@@ -297,7 +289,6 @@ async def cmd_subscribe(message: Message):
         return
     
     if len(channels) == 1:
-        # Один канал — сразу создаём платёж
         channel_id = channels[0]["id"]
         payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
         
@@ -311,20 +302,14 @@ async def cmd_subscribe(message: Message):
         else:
             await message.answer("❌ Ошибка создания платежа.")
     else:
-        # Несколько каналов — показываем список
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=ch["title"], 
-                callback_data=f"subscribe_channel:{ch['id']}"
-            )]
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"subscribe_channel:{ch['id']}")]
             for ch in channels
         ])
         await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
 
-
 @router.callback_query(F.data.startswith("subscribe_channel:"))
 async def subscribe_channel_callback(callback: CallbackQuery):
-    """Обработка выбора канала для подписки."""
     channel_id = callback.data.split(":")[1]
     user_id = str(callback.from_user.id)
     
@@ -345,7 +330,6 @@ async def subscribe_channel_callback(callback: CallbackQuery):
 # ---------------------------- Промокоды ----------------------------
 @router.message(F.text == "🎁 Промокод")
 async def promo_info(message: Message):
-    """Информация о промокодах."""
     await message.answer(
         "Для активации промокода отправьте команду:\n"
         "/promo <код>\n\n"
@@ -354,7 +338,6 @@ async def promo_info(message: Message):
 
 @router.message(Command("promo"))
 async def promo_command(message: Message, state: FSMContext):
-    """Обработка команды /promo."""
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("Использование:\n/promo <код> — активация промокода\n/promo create — создать промокод (только для админов)")
@@ -372,7 +355,6 @@ async def promo_command(message: Message, state: FSMContext):
         success, msg = db.activate_promocode(code, str(message.from_user.id))
         await message.answer(msg)
 
-# ---------------------------- FSM для создания промокода ----------------------------
 @router.message(PromoCreate.waiting_for_code)
 async def promo_code_entered(message: Message, state: FSMContext):
     code = message.text.strip()
@@ -437,11 +419,9 @@ async def community_button(message: Message):
 # ---------------------------- Запуск бота ----------------------------
 async def main():
     db.init_db()
-    # Запускаем Flask в отдельном потоке
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

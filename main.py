@@ -15,6 +15,7 @@ from flask import Flask, request
 import services.payments as payments_service
 import config
 import database as db
+import services.subscriptions as subscriptions_service
 
 # ---------------------------- Настройка логирования ----------------------------
 logging.basicConfig(level=logging.INFO)
@@ -41,12 +42,19 @@ def tochka_webhook():
         payment_link_id = webhook_data.get("paymentLinkId", "")
         status = webhook_data.get("status", "")
 
-        if status == "success":
+        if status == "success" or status == "confirmed":
             db.update_payment_status(payment_link_id, "paid")
-            print(f"✅ Платёж получен: {amount} ₽ — {purpose}")
+            
+            # Находим платёж в БД
+            payment = db.get_payment_by_link_id(payment_link_id)
+            if payment:
+                user_id = payment["user_id"]
+                # Активируем подписку
+                # Пока просто логируем
+                print(f"✅ Платёж получен: {amount} ₽ — {purpose} от {user_id}")
 
     return "OK", 200
-
+    
 # ---------------------------- Инициализация бота и диспетчера ----------------------------
 bot = Bot(token=config.BOT_TOKEN)
 storage = MemoryStorage()
@@ -223,6 +231,65 @@ async def cmd_cancel(message: Message, state: FSMContext):
     """Отмена текущего действия."""
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_keyboard())
+
+# ---------------------------- Подписка на канал ----------------------------
+@router.message(Command("subscribe"))
+async def cmd_subscribe(message: Message):
+    """Команда для подписки на канал."""
+    user_id = str(message.from_user.id)
+    
+    # Получаем каналы пользователя
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("❌ У вас нет подключённых каналов. Сначала добавьте канал.")
+        return
+    
+    if len(channels) == 1:
+        # Один канал — сразу создаём платёж
+        channel_id = channels[0]["id"]
+        payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
+        
+        if payment_url:
+            await message.answer(
+                f"💳 Подписка на канал «{channels[0]['title']}»\n"
+                f"Цена: 1 ₽\n"
+                f"Длительность: 30 дней\n\n"
+                f"Оплатите по ссылке:\n{payment_url}"
+            )
+        else:
+            await message.answer("❌ Ошибка создания платежа.")
+    else:
+        # Несколько каналов — показываем список
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=ch["title"], 
+                callback_data=f"subscribe_channel:{ch['id']}"
+            )]
+            for ch in channels
+        ])
+        await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("subscribe_channel:"))
+async def subscribe_channel_callback(callback: CallbackQuery):
+    """Обработка выбора канала для подписки."""
+    channel_id = callback.data.split(":")[1]
+    user_id = str(callback.from_user.id)
+    
+    payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
+    
+    if payment_url:
+        await callback.message.answer(
+            f"💳 Подписка на канал\n"
+            f"Цена: 1 ₽\n"
+            f"Длительность: 30 дней\n\n"
+            f"Оплатите по ссылке:\n{payment_url}"
+        )
+    else:
+        await callback.message.answer("❌ Ошибка создания платежа.")
+    
+    await callback.answer()
 
 # ---------------------------- Промокоды ----------------------------
 @router.message(F.text == "🎁 Промокод")

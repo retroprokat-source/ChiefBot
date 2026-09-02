@@ -294,6 +294,67 @@ async def select_channel_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await publish_post(callback.message, state, channel_id)
 
+@router.callback_query(F.data == "post_now")
+async def post_now_callback(callback: CallbackQuery, state: FSMContext):
+    """Немедленная публикация."""
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    
+    if not channel_id:
+        await callback.message.answer("❌ Канал не выбран.")
+        await callback.answer()
+        return
+    
+    await callback.answer()
+    await publish_post(callback.message, state, channel_id)
+
+
+@router.callback_query(F.data == "post_schedule")
+async def post_schedule_callback(callback: CallbackQuery, state: FSMContext):
+    """Запрос времени для отложенного постинга."""
+    await callback.message.answer(
+        "Введите дату и время в формате:\n"
+        "ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
+        "Например: 05.09.2026 15:30"
+    )
+    await state.set_state(NewPost.waiting_for_time)
+    await callback.answer()
+
+
+@router.message(NewPost.waiting_for_time)
+async def process_schedule_time(message: Message, state: FSMContext):
+    """Обработка времени для отложенного постинга."""
+    from datetime import datetime
+    import services.scheduler as scheduler_service
+    
+    try:
+        scheduled_dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
+        scheduled_at = scheduled_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        data = await state.get_data()
+        channel_id = data.get("channel_id")
+        content = data.get("content", "")
+        media_type = data.get("media_type")
+        media_file_id = data.get("media_file_id")
+        
+        # Сохраняем пост в БД со статусом scheduled
+        db.add_scheduled_post(channel_id, content, media_type, media_file_id, scheduled_at)
+        
+        # Добавляем задачу в планировщик
+        await scheduler_service.schedule_post(
+            channel_id=channel_id,
+            content=content,
+            media_type=media_type,
+            media_file_id=media_file_id,
+            scheduled_at=scheduled_dt
+        )
+        
+        await message.answer(f"✅ Пост запланирован на {message.text.strip()}")
+        await state.clear()
+        
+    except ValueError:
+        await message.answer("❌ Неверный формат. Используйте: ДД.ММ.ГГГГ ЧЧ:ММ")
+
 # ---------------------------- Команда /cancel ----------------------------
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):

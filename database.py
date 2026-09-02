@@ -251,16 +251,24 @@ def check_limits(user_id: str):
     """
     user = get_user(user_id)
     if not user:
-        return {"allowed_channels": 0, "current_channels": 0, "allowed_posts": 0, "current_posts": 0}
+        # Пользователь не найден — создаём с тарифом free
+        add_user(user_id)
+        user = get_user(user_id)
 
     # Лимиты по тарифу
     limits = {
         "free": {"channels": 1, "posts": 10},
         "pro": {"channels": 5, "posts": 100},
-        "premium": {"channels": 20, "posts": 999999}  # практически безлимит
+        "premium": {"channels": 20, "posts": 999999}
     }
+
+    # Если план не определён или не в списке — ставим free
     plan = user.get("plan", "free")
+    if plan not in limits:
+        plan = "free"
+
     current_channels = len(get_user_channels(user_id))
+
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM posts WHERE channel_id IN (SELECT id FROM channels WHERE owner_id = ?)", (user_id,))
@@ -273,20 +281,6 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
-
-# ---------------------------- Платежи ----------------------------
-
-def add_payment(user_id: str, channel_id: str, amount: float, purpose: str, payment_link_id: str):
-    """Добавляет платёж в БД."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO payments (user_id, channel_id, amount, purpose, payment_link_id, status, created_at)
-        VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP)
-    """, (user_id, channel_id, amount, purpose, payment_link_id))
-    conn.commit()
-    conn.close()
-
 
 def update_payment_status(payment_link_id: str, status: str):
     """Обновляет статус платежа по payment_link_id."""

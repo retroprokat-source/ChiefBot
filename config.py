@@ -1,12 +1,6 @@
-# config.py
-# Токен вашего бота, полученный от @BotFather
-BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
+import os
 
-# ID администраторов (можно несколько) — им доступна команда /promo create
-ADMIN_IDS = [456504792]  # замените на свой Telegram user_id
-
-# Ссылка на приватную группу для админов (сообщество)
-COMMUNITY_CHAT_URL = "https://t.me/+abcdefghijk"
-
-# Путь к файлу базы данных SQLite
-DB_PATH = "controllerbot.db"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "0").split(",")]
+COMMUNITY_CHAT_URL = os.getenv("COMMUNITY_CHAT_URL", "https://t.me/chief_posting_bot")
+DB_PATH = "chiefbot.db"

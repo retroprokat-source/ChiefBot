@@ -436,10 +436,19 @@ async def community_button(message: Message):
 # ---------------------------- Запуск бота ----------------------------
 async def main():
     db.init_db()
+    # Регистрируем вебхук
+    payments_service.setup_webhook()
+    # Запускаем Flask в отдельном потоке
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
+    # Запускаем бота
     await dp.start_polling(bot)
+
+# ---------------------------- Регистрация вебхука ----------------------------
+async def setup_webhook_on_startup():
+    """Регистрирует вебхук Точки при запуске."""
+    payments_service.setup_webhook()
 
 if __name__ == "__main__":
     asyncio.run(main())

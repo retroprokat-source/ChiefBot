@@ -214,14 +214,9 @@ async def process_forwarded_message(message: Message, state: FSMContext):
 # ---------------------------- Создание поста ----------------------------
 @router.message(F.text == "📝 Новый пост")
 async def new_post_start(message: Message, state: FSMContext):
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="post_now")],
-        [InlineKeyboardButton(text="⏰ Запланировать", callback_data="post_schedule")]
-    ])
     await message.answer(
         "Отправьте текст поста. Если нужно прикрепить фото, отправьте его вместе с текстом в одном сообщении.\n"
-        "Для отмены нажмите /cancel.",
-        reply_markup=keyboard
+        "Для отмены нажмите /cancel."
     )
     await state.set_state(NewPost.waiting_for_content)
 
@@ -252,18 +247,21 @@ async def process_post_content(message: Message, state: FSMContext):
         return
 
     if len(channels) == 1:
+        # Сохраняем канал в состояние
         await state.update_data(channel_id=channels[0]["id"])
+        await state.set_state(NewPost.waiting_for_channel)
+        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="post_now")],
-            [InlineKeyboardButton(text="⏰ Запланировать", callback_data="post_schedule")]
+            [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="publish_now")],
+            [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")]
         ])
         await message.answer("Выберите действие:", reply_markup=keyboard)
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=ch["title"], callback_data=f"select_channel:{ch['id']}")]
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"channel_selected:{ch['id']}")]
             for ch in channels
         ])
-        await message.answer("Выберите канал для публикации:", reply_markup=keyboard)
+        await message.answer("Выберите канал:", reply_markup=keyboard)
         await state.set_state(NewPost.waiting_for_channel)
 
 async def publish_post(message: Message, state: FSMContext, channel_id: str):

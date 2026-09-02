@@ -300,3 +300,14 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
+
+def add_scheduled_post(channel_id: str, content: str, media_type: str, media_file_id: str, scheduled_at: str):
+    """Сохраняет отложенный пост."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO posts (channel_id, content, media_type, media_file_id, scheduled_at, status)
+        VALUES (?, ?, ?, ?, ?, 'scheduled')
+    """, (channel_id, content, media_type, media_file_id, scheduled_at))
+    conn.commit()
+    conn.close()

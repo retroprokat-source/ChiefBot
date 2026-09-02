@@ -97,3 +97,16 @@ def setup_webhook():
     except Exception as e:
         logging.error(f"❌ Ошибка: {e}")
         return False
+
+def process_webhook(raw_body: str) -> dict:
+    """Декодирует JWT-вебхук от Точки."""
+    try:
+        parts = raw_body.split('.')
+        if len(parts) < 2:
+            return {}
+        payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
+        decoded = base64.b64decode(payload_b64).decode('utf-8')
+        return json.loads(decoded)
+    except Exception as e:
+        logging.error(f"❌ Ошибка декодирования вебхука: {e}")
+        return {}

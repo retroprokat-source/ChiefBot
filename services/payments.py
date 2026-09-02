@@ -1,3 +1,16 @@
+# services/payments.py
+import json
+import uuid
+import base64
+import logging
+import requests
+from datetime import datetime
+import config
+import database as db
+
+CERT_FILE = "russian_certs.pem"
+
+
 def create_payment_link(user_id: str, channel_id: str, amount: str, purpose: str) -> str:
     """
     Создаёт платёжную ссылку в Точке.
@@ -40,7 +53,6 @@ def create_payment_link(user_id: str, channel_id: str, amount: str, purpose: str
             payment_url = data.get("Data", {}).get("paymentUrl") or data.get("Data", {}).get("paymentLink")
             
             if payment_url:
-                # Сохраняем channel_id в платеже
                 db.add_payment(user_id, channel_id, float(amount), purpose, payment_link_id)
                 logging.info(f"✅ Платёжная ссылка создана: {payment_url[:100]}")
                 return payment_url
@@ -54,3 +66,43 @@ def create_payment_link(user_id: str, channel_id: str, amount: str, purpose: str
     except Exception as e:
         logging.error(f"❌ Ошибка создания платежа: {e}")
         return None
+
+
+def setup_webhook():
+    """Регистрирует вебхук в Точке."""
+    url = f"https://enter.tochka.com/uapi/webhook/v1.0/{config.TOCHKA_CLIENT_ID}"
+    payload = {
+        "webhooksList": ["acquiringInternetPayment"],
+        "url": "https://chiefbot.onrender.com/webhook/tochka"
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {config.TOCHKA_API_TOKEN}'
+    }
+
+    try:
+        response = requests.put(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
+        if response.status_code == 200:
+            logging.info("✅ Вебхук Точки зарегистрирован")
+            return True
+        else:
+            logging.error(f"❌ Ошибка регистрации вебхука: {response.status_code} {response.text}")
+            return False
+    except Exception as e:
+        logging.error(f"❌ Ошибка подключения к Точке: {e}")
+        return False
+
+
+def process_webhook(raw_body: str) -> dict:
+    """Декодирует JWT-вебхук от Точки."""
+    try:
+        parts = raw_body.split('.')
+        if len(parts) < 2:
+            return {}
+        payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
+        decoded = base64.b64decode(payload_b64).decode('utf-8')
+        return json.loads(decoded)
+    except Exception as e:
+        logging.error(f"❌ Ошибка декодирования вебхука: {e}")
+        return {}

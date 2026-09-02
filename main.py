@@ -17,6 +17,7 @@ import config
 import database as db
 import services.payments as payments_service
 import services.subscriptions as subscriptions_service
+import services.scheduler as scheduler_service
 
 # ---------------------------- Настройка логирования ----------------------------
 logging.basicConfig(level=logging.INFO)
@@ -489,7 +490,11 @@ async def main():
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
+    
+    # Запускаем планировщик
+    asyncio.create_task(scheduler_service.run_scheduler())
+    
     await dp.start_polling(bot)
-
+    
 if __name__ == "__main__":
     asyncio.run(main())

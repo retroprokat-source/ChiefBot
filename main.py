@@ -1,6 +1,6 @@
 # main.py
-import json
 import asyncio
+import json
 import logging
 import sqlite3
 import os
@@ -20,6 +20,13 @@ import services.subscriptions as subscriptions_service
 
 # ---------------------------- Настройка логирования ----------------------------
 logging.basicConfig(level=logging.INFO)
+
+# ---------------------------- Инициализация бота и диспетчера ----------------------------
+bot = Bot(token=config.BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+router = Router()
+dp.include_router(router)
 
 # ---------------------------- HTTP-сервер для Render ----------------------------
 app = Flask(__name__)
@@ -61,8 +68,26 @@ def tochka_webhook():
                 channel_id = payment["channel_id"]
                 
                 if channel_id:
-                    subscriptions_service.activate_subscription(user_id, channel_id)
+                    expires_at = subscriptions_service.activate_subscription(user_id, channel_id)
                     logging.info(f"✅ Подписка активирована для user={user_id}, channel={channel_id}")
+                    
+                    # Отправляем уведомление пользователю
+                    try:
+                        channel_info = db.get_channel_by_id(channel_id)
+                        channel_title = channel_info["title"] if channel_info else channel_id
+                        
+                        asyncio.run_coroutine_threadsafe(
+                            bot.send_message(
+                                chat_id=int(user_id),
+                                text=f"✅ Оплата получена!\n\n"
+                                     f"Подписка на канал «{channel_title}» активирована.\n"
+                                     f"Действует до: {expires_at}"
+                            ),
+                            dp.loop
+                        )
+                        logging.info(f"✅ Уведомление отправлено пользователю {user_id}")
+                    except Exception as e:
+                        logging.error(f"❌ Ошибка отправки уведомления: {e}")
                 else:
                     logging.error(f"❌ Нет channel_id в платеже {payment_link_id}")
             else:
@@ -71,13 +96,6 @@ def tochka_webhook():
             logging.warning(f"⚠️ Неизвестный статус: {status}, paymentStatus: {payment_status}")
 
     return "OK", 200
-    
-# ---------------------------- Инициализация бота и диспетчера ----------------------------
-bot = Bot(token=config.BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-router = Router()
-dp.include_router(router)
 
 # ---------------------------- Состояния FSM ----------------------------
 class AddChannel(StatesGroup):
@@ -440,19 +458,11 @@ async def community_button(message: Message):
 # ---------------------------- Запуск бота ----------------------------
 async def main():
     db.init_db()
-    # Регистрируем вебхук
     payments_service.setup_webhook()
-    # Запускаем Flask в отдельном потоке
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    # Запускаем бота
     await dp.start_polling(bot)
-
-# ---------------------------- Регистрация вебхука ----------------------------
-async def setup_webhook_on_startup():
-    """Регистрирует вебхук Точки при запуске."""
-    payments_service.setup_webhook()
 
 if __name__ == "__main__":
     asyncio.run(main())

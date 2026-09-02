@@ -60,36 +60,27 @@ async def schedule_post(channel_id: str, content: str, media_type: str, media_fi
     
     logging.info(f"⏰ Пост запланирован через {delay} секунд в канал {channel_id}")
     
-    await asyncio.sleep(delay)
+    async def publish():
+        await asyncio.sleep(delay)
+        try:
+            import requests as r
+            
+            if media_type == "photo":
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendPhoto"
+                data = {"chat_id": int(channel_id), "photo": media_file_id, "caption": content}
+            elif media_type == "video":
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendVideo"
+                data = {"chat_id": int(channel_id), "video": media_file_id, "caption": content}
+            else:
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+                data = {"chat_id": int(channel_id), "text": content}
+            
+            response = r.post(url, json=data)
+            if response.status_code == 200:
+                logging.info(f"✅ Отложенный пост опубликован в {channel_id}")
+            else:
+                logging.error(f"❌ Ошибка публикации: {response.text[:300]}")
+        except Exception as e:
+            logging.error(f"❌ Ошибка: {e}")
     
-    try:
-        import requests as r
-        
-        if media_type == "photo":
-            url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendPhoto"
-            data = {
-                "chat_id": int(channel_id),
-                "photo": media_file_id,
-                "caption": content
-            }
-        elif media_type == "video":
-            url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendVideo"
-            data = {
-                "chat_id": int(channel_id),
-                "video": media_file_id,
-                "caption": content
-            }
-        else:
-            url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
-            data = {
-                "chat_id": int(channel_id),
-                "text": content
-            }
-        
-        response = r.post(url, json=data)
-        if response.status_code == 200:
-            logging.info(f"✅ Отложенный пост опубликован в {channel_id}")
-        else:
-            logging.error(f"❌ Ошибка публикации: {response.text[:300]}")
-    except Exception as e:
-        logging.error(f"❌ Ошибка: {e}")
+    asyncio.create_task(publish())

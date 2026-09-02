@@ -1,4 +1,5 @@
 # main.py
+import json
 import asyncio
 import logging
 import sqlite3
@@ -34,10 +35,10 @@ def run_flask():
 @app.route('/webhook/tochka', methods=['POST'])
 def tochka_webhook():
     raw_body = request.get_data(as_text=True)
-    logging.info(f"🔔 Вебхук получен: {raw_body[:500]}")
+    logging.info(f"🔔 Вебхук получен: {raw_body[:1000]}")
     
     webhook_data = payments_service.process_webhook(raw_body)
-    logging.info(f"📦 Декодированные данные: {json.dumps(webhook_data, ensure_ascii=False)[:500]}")
+    logging.info(f"📦 Декодированные данные: {json.dumps(webhook_data, ensure_ascii=False)[:1000]}")
 
     if webhook_data:
         amount = webhook_data.get("amount", 0)
@@ -45,7 +46,7 @@ def tochka_webhook():
         payment_link_id = webhook_data.get("paymentLinkId", "")
         status = webhook_data.get("status", "")
         payment_status = webhook_data.get("paymentStatus", "")
-        
+
         logging.info(f"Статус: {status}, paymentStatus: {payment_status}, paymentLinkId: {payment_link_id}")
 
         if status in ("success", "confirmed", "paid") or payment_status in ("success", "confirmed", "paid", "SUCCESS", "CONFIRMED", "PAID"):
@@ -67,7 +68,7 @@ def tochka_webhook():
             logging.warning(f"⚠️ Неизвестный статус: {status}, paymentStatus: {payment_status}")
 
     return "OK", 200
-
+    
 # ---------------------------- Инициализация бота и диспетчера ----------------------------
 bot = Bot(token=config.BOT_TOKEN)
 storage = MemoryStorage()

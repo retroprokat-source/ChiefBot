@@ -1,0 +1,303 @@
+# main.py
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+import config
+import database as db
+
+# ---------------------------- Настройка логирования ----------------------------
+logging.basicConfig(level=logging.INFO)
+
+# ---------------------------- Инициализация бота и диспетчера ----------------------------
+bot = Bot(token=config.BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+router = Router()
+dp.include_router(router)
+
+# ---------------------------- Состояния FSM ----------------------------
+class AddChannel(StatesGroup):
+    waiting_for_forward = State()
+
+class NewPost(StatesGroup):
+    waiting_for_content = State()
+    waiting_for_channel = State()
+
+class PromoCreate(StatesGroup):
+    waiting_for_code = State()
+    waiting_for_plan = State()
+    waiting_for_duration = State()
+    waiting_for_uses = State()
+
+# ---------------------------- Клавиатуры ----------------------------
+def main_keyboard():
+    """Главное меню бота."""
+    buttons = [
+        [KeyboardButton(text="➕ Добавить канал")],
+        [KeyboardButton(text="📝 Новый пост")],
+        [KeyboardButton(text="🎁 Промокод")],
+        [KeyboardButton(text="💬 Сообщество админов")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+# ---------------------------- Обработчик команды /start ----------------------------
+@router.message(CommandStart())
+async def cmd_start(message: Message):
+    """Приветствие и добавление пользователя в БД."""
+    user_id = str(message.from_user.id)
+    username = message.from_user.username
+    db.add_user(user_id, username)
+    await message.answer(
+        "👋 Привет! Я ControllerBot — помощник для администраторов Telegram-каналов.\n\n"
+        "Выберите действие в меню ниже:",
+        reply_markup=main_keyboard()
+    )
+
+# ---------------------------- Добавление канала ----------------------------
+@router.message(F.text == "➕ Добавить канал")
+async def add_channel_start(message: Message, state: FSMContext):
+    """Начало процесса добавления канала."""
+    await message.answer(
+        "Чтобы добавить канал, выполните два шага:\n"
+        "1. Добавьте меня в администраторы вашего канала (с правами на публикацию).\n"
+        "2. Перешлите сюда любое сообщение из этого канала.\n\n"
+        "Пересылайте сообщение прямо сейчас."
+    )
+    await state.set_state(AddChannel.waiting_for_forward)
+
+@router.message(AddChannel.waiting_for_forward)
+async def process_forwarded_message(message: Message, state: FSMContext):
+    """Обработка пересланного сообщения из канала."""
+    # Проверяем, что сообщение переслано из канала
+    if not message.forward_from_chat or message.forward_from_chat.type != "channel":
+        await message.answer("❌ Это не пересланное сообщение из канала. Попробуйте ещё раз.")
+        return
+
+    chat_id = str(message.forward_from_chat.id)
+    channel_title = message.forward_from_chat.title
+    channel_username = message.forward_from_chat.username
+    user_id = str(message.from_user.id)
+
+    # Проверяем, что пользователь является администратором канала
+    try:
+        member = await bot.get_chat_member(chat_id=int(chat_id), user_id=int(user_id))
+        if member.status not in ("administrator", "creator"):
+            await message.answer("❌ Вы не являетесь администратором этого канала.")
+            await state.clear()
+            return
+    except Exception as e:
+        await message.answer(f"❌ Не удалось проверить ваши права. Убедитесь, что бот добавлен в канал. Ошибка: {e}")
+        await state.clear()
+        return
+
+    # Проверяем лимит каналов для тарифа
+    limits = db.check_limits(user_id)
+    if limits["current_channels"] >= limits["allowed_channels"]:
+        await message.answer(
+            f"❌ Вы достигли лимита каналов для вашего тарифа ({limits['allowed_channels']}). "
+            "Повысьте тариф, чтобы добавить больше каналов."
+        )
+        await state.clear()
+        return
+
+    # Сохраняем канал в базу и верифицируем
+    db.add_channel(chat_id, user_id, channel_title, channel_username)
+    db.verify_channel(chat_id)
+
+    await message.answer(f"✅ Канал «{channel_title}» успешно подключён и верифицирован!")
+    await state.clear()
+
+# ---------------------------- Создание поста ----------------------------
+@router.message(F.text == "📝 Новый пост")
+async def new_post_start(message: Message, state: FSMContext):
+    """Начало создания нового поста."""
+    await message.answer(
+        "Отправьте текст поста. Если нужно прикрепить фото, отправьте его вместе с текстом в одном сообщении.\n"
+        "Для отмены нажмите /cancel."
+    )
+    await state.set_state(NewPost.waiting_for_content)
+
+@router.message(NewPost.waiting_for_content)
+async def process_post_content(message: Message, state: FSMContext):
+    """Получение контента поста и выбор канала."""
+    content = message.text or message.caption or ""
+    media_type = None
+    media_file_id = None
+
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id  # берём фото максимального размера
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+
+    if not content and not media_file_id:
+        await message.answer("❌ Пост пустой. Отправьте текст или фото.")
+        return
+
+    # Сохраняем во временные данные состояния
+    await state.update_data(content=content, media_type=media_type, media_file_id=media_file_id)
+
+    # Получаем каналы пользователя
+    channels = db.get_user_channels(str(message.from_user.id))
+    if not channels:
+        await message.answer("❌ У вас нет подключённых каналов. Сначала добавьте канал.")
+        await state.clear()
+        return
+
+    if len(channels) == 1:
+        # Если канал один — публикуем сразу
+        await publish_post(message, state, channels[0]["id"])
+    else:
+        # Если несколько — показываем инлайн-кнопки для выбора
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"select_channel:{ch['id']}")]
+            for ch in channels
+        ])
+        await message.answer("Выберите канал для публикации:", reply_markup=keyboard)
+        await state.set_state(NewPost.waiting_for_channel)
+
+async def publish_post(message: Message, state: FSMContext, channel_id: str):
+    """Публикация поста в выбранный канал."""
+    data = await state.get_data()
+    content = data.get("content", "")
+    media_type = data.get("media_type")
+    media_file_id = data.get("media_file_id")
+
+    try:
+        if media_type == "photo":
+            await bot.send_photo(chat_id=int(channel_id), photo=media_file_id, caption=content)
+        elif media_type == "video":
+            await bot.send_video(chat_id=int(channel_id), video=media_file_id, caption=content)
+        else:
+            await bot.send_message(chat_id=int(channel_id), text=content)
+
+        # Сохраняем пост в БД
+        db.add_post(channel_id, content, media_type, media_file_id, status="posted")
+        await message.answer("✅ Пост успешно опубликован!")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при публикации: {e}")
+    finally:
+        await state.clear()
+
+@router.callback_query(NewPost.waiting_for_channel, F.data.startswith("select_channel:"))
+async def select_channel_callback(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора канала из инлайн-кнопок."""
+    channel_id = callback.data.split(":")[1]
+    await callback.answer()
+    await publish_post(callback.message, state, channel_id)
+
+# ---------------------------- Команда /cancel ----------------------------
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    """Отмена текущего действия."""
+    await state.clear()
+    await message.answer("Действие отменено.", reply_markup=main_keyboard())
+
+# ---------------------------- Промокоды ----------------------------
+@router.message(F.text == "🎁 Промокод")
+async def promo_info(message: Message):
+    """Информация о промокодах."""
+    await message.answer(
+        "Для активации промокода отправьте команду:\n"
+        "/promo <код>\n\n"
+        "Например: /promo ABC123"
+    )
+
+@router.message(Command("promo"))
+async def promo_command(message: Message, state: FSMContext):
+    """Обработка команды /promo."""
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("Использование:\n/promo <код> — активация промокода\n/promo create — создать промокод (только для админов)")
+        return
+
+    subcommand = args[1].strip()
+    if subcommand == "create":
+        # Проверяем, админ ли пользователь
+        if message.from_user.id not in config.ADMIN_IDS:
+            await message.answer("⛔ У вас нет прав для создания промокодов.")
+            return
+        await message.answer("Введите код промокода (например, ABC123):")
+        await state.set_state(PromoCreate.waiting_for_code)
+    else:
+        # Активация промокода
+        code = subcommand
+        success, msg = db.activate_promocode(code, str(message.from_user.id))
+        await message.answer(msg)
+
+# ---------------------------- FSM для создания промокода ----------------------------
+@router.message(PromoCreate.waiting_for_code)
+async def promo_code_entered(message: Message, state: FSMContext):
+    code = message.text.strip()
+    if not code:
+        await message.answer("Код не может быть пустым. Введите ещё раз.")
+        return
+    await state.update_data(code=code)
+    await message.answer("Выберите тариф:\n- pro\n- premium")
+    await state.set_state(PromoCreate.waiting_for_plan)
+
+@router.message(PromoCreate.waiting_for_plan)
+async def promo_plan_entered(message: Message, state: FSMContext):
+    plan = message.text.strip().lower()
+    if plan not in ("pro", "premium"):
+        await message.answer("Некорректный тариф. Введите pro или premium.")
+        return
+    await state.update_data(plan=plan)
+    await message.answer("Введите длительность подписки в днях (целое число):")
+    await state.set_state(PromoCreate.waiting_for_duration)
+
+@router.message(PromoCreate.waiting_for_duration)
+async def promo_duration_entered(message: Message, state: FSMContext):
+    try:
+        duration = int(message.text.strip())
+        if duration <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введите положительное целое число дней.")
+        return
+    await state.update_data(duration_days=duration)
+    await message.answer("Введите количество использований промокода (целое число):")
+    await state.set_state(PromoCreate.waiting_for_uses)
+
+@router.message(PromoCreate.waiting_for_uses)
+async def promo_uses_entered(message: Message, state: FSMContext):
+    try:
+        uses = int(message.text.strip())
+        if uses <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("Введите положительное целое число.")
+        return
+
+    data = await state.get_data()
+    db.add_promocode(
+        code=data["code"],
+        plan=data["plan"],
+        duration_days=data["duration_days"],
+        uses_left=uses,
+        created_by=str(message.from_user.id)
+    )
+    await message.answer(f"✅ Промокод {data['code']} создан:\nТариф: {data['plan']}\nДней: {data['duration_days']}\nИспользований: {uses}")
+    await state.clear()
+
+# ---------------------------- Кнопка сообщества ----------------------------
+@router.message(F.text == "💬 Сообщество админов")
+async def community_button(message: Message):
+    await message.answer(
+        f"Присоединяйтесь к нашему сообществу администраторов Telegram-каналов:\n{config.COMMUNITY_CHAT_URL}"
+    )
+
+# ---------------------------- Запуск бота ----------------------------
+async def main():
+    db.init_db()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

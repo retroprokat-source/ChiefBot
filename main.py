@@ -32,8 +32,11 @@ def run_flask():
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-@app.route('/webhook/tochka', methods=['POST'])
+@app.route('/webhook/tochka', methods=['GET', 'POST'])
 def tochka_webhook():
+    if request.method == 'GET':
+        return "OK", 200
+    
     raw_body = request.get_data(as_text=True)
     logging.info(f"🔔 Вебхук получен: {raw_body[:1000]}")
     

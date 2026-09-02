@@ -141,6 +141,24 @@ def get_user_channels(owner_id: str):
     conn.close()
     return [{"id": r[0], "owner_id": r[1], "title": r[2], "username": r[3], "verified": r[4], "connected_at": r[5]} for r in rows]
 
+def get_channel_by_id(channel_id: str):
+    """Возвращает канал по ID."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "owner_id": row[1],
+            "title": row[2],
+            "username": row[3],
+            "verified": row[4],
+            "connected_at": row[5]
+        }
+    return None
+
 # ---------------------------- Посты ----------------------------
 
 def add_post(channel_id: str, content: str, media_type: str = None, media_file_id: str = None, status: str = "posted"):

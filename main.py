@@ -286,14 +286,19 @@ async def publish_post(message: Message, state: FSMContext, channel_id: str):
     finally:
         await state.clear()
 
-@router.callback_query(NewPost.waiting_for_channel, F.data.startswith("select_channel:"))
-async def select_channel_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data.startswith("channel_selected:"))
+async def channel_selected_callback(callback: CallbackQuery, state: FSMContext):
     channel_id = callback.data.split(":")[1]
+    await state.update_data(channel_id=channel_id)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="publish_now")],
+        [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")]
+    ])
+    await callback.message.answer("Выберите действие:", reply_markup=keyboard)
     await callback.answer()
-    await publish_post(callback.message, state, channel_id)
 
-@router.callback_query(F.data == "post_now")
-async def post_now_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "publish_now")
+async def publish_now_callback(callback: CallbackQuery, state: FSMContext):
     """Немедленная публикация."""
     data = await state.get_data()
     channel_id = data.get("channel_id")
@@ -307,8 +312,8 @@ async def post_now_callback(callback: CallbackQuery, state: FSMContext):
     await publish_post(callback.message, state, channel_id)
 
 
-@router.callback_query(F.data == "post_schedule")
-async def post_schedule_callback(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "schedule_post")
+async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
     """Запрос времени для отложенного постинга."""
     await callback.message.answer(
         "Введите дату и время в формате:\n"

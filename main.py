@@ -37,8 +37,9 @@ def home():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
+    payments_service.setup_webhook()  # ← регистрация вебхука при запуске
     app.run(host="0.0.0.0", port=port)
-
+    
 @app.route('/webhook/tochka', methods=['GET', 'POST'])
 def tochka_webhook():
     if request.method == 'GET':
@@ -474,14 +475,9 @@ async def community_button(message: Message):
 # ---------------------------- Запуск бота ----------------------------
 async def main():
     db.init_db()
-    # Сначала запускаем Flask
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    # Ждём 5 секунд, чтобы Flask точно запустился
-    await asyncio.sleep(5)
-    # Потом регистрируем вебхук
-    payments_service.setup_webhook()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

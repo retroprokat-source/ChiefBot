@@ -52,7 +52,7 @@ def tochka_webhook():
 
         logging.info(f"Статус: {status}, paymentStatus: {payment_status}, paymentLinkId: {payment_link_id}")
 
-        if status in ("success", "confirmed", "paid") or payment_status in ("success", "confirmed", "paid", "SUCCESS", "CONFIRMED", "PAID"):
+        if status in ("success", "confirmed", "paid", "APPROVED", "approved") or payment_status in ("success", "confirmed", "paid", "APPROVED", "approved", "SUCCESS", "CONFIRMED", "PAID"):
             db.update_payment_status(payment_link_id, "paid")
             
             payment = db.get_payment_by_link_id(payment_link_id)

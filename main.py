@@ -71,20 +71,36 @@ def tochka_webhook():
                     expires_at = subscriptions_service.activate_subscription(user_id, channel_id)
                     logging.info(f"✅ Подписка активирована для user={user_id}, channel={channel_id}")
                     
-                    # Отправляем уведомление пользователю
+                    # Отправляем уведомление и создаём пригласительную ссылку
                     try:
                         channel_info = db.get_channel_by_id(channel_id)
                         channel_title = channel_info["title"] if channel_info else channel_id
                         
-                        asyncio.run_coroutine_threadsafe(
-                            bot.send_message(
-                                chat_id=int(user_id),
-                                text=f"✅ Оплата получена!\n\n"
-                                     f"Подписка на канал «{channel_title}» активирована.\n"
-                                     f"Действует до: {expires_at}"
-                            ),
-                            dp.loop
-                        )
+                        import requests as r
+                        
+                        # Создаём пригласительную ссылку
+                        invite_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/createChatInviteLink"
+                        invite_response = r.post(invite_url, json={
+                            "chat_id": int(channel_id),
+                            "member_limit": 1
+                        })
+                        
+                        invite_link = None
+                        if invite_response.status_code == 200:
+                            invite_link = invite_response.json().get("result", {}).get("invite_link")
+                        
+                        # Формируем текст сообщения
+                        message_text = f"✅ Оплата получена!\n\nПодписка на канал «{channel_title}» активирована.\nДействует до: {expires_at}"
+                        
+                        if invite_link:
+                            message_text += f"\n\n🔗 Вступите в канал:\n{invite_link}"
+                        
+                        # Отправляем сообщение
+                        telegram_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+                        r.post(telegram_url, json={
+                            "chat_id": int(user_id),
+                            "text": message_text
+                        })
                         logging.info(f"✅ Уведомление отправлено пользователю {user_id}")
                     except Exception as e:
                         logging.error(f"❌ Ошибка отправки уведомления: {e}")

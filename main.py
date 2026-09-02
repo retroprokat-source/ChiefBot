@@ -42,12 +42,24 @@ def tochka_webhook():
         payment_link_id = webhook_data.get("paymentLinkId", "")
         status = webhook_data.get("status", "")
 
-        if status == "success" or status == "confirmed":
+        logging.info(f"Вебхук получен: status={status}, paymentLinkId={payment_link_id}")
+
+        if status == "success" or status == "confirmed" or status == "paid":
             db.update_payment_status(payment_link_id, "paid")
+            
             payment = db.get_payment_by_link_id(payment_link_id)
             if payment:
                 user_id = payment["user_id"]
-                print(f"✅ Платёж получен: {amount} ₽ — {purpose} от {user_id}")
+                channel_id = payment["channel_id"]
+                
+                # Активируем подписку
+                if channel_id:
+                    subscriptions_service.activate_subscription(user_id, channel_id)
+                    logging.info(f"✅ Подписка активирована для user={user_id}, channel={channel_id}")
+                else:
+                    logging.error(f"❌ Нет channel_id в платеже {payment_link_id}")
+            else:
+                logging.error(f"❌ Платёж не найден: {payment_link_id}")
 
     return "OK", 200
 

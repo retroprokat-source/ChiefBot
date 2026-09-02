@@ -2,6 +2,7 @@
 import json
 import uuid
 import base64
+import logging
 import requests
 from datetime import datetime
 import config
@@ -12,7 +13,7 @@ CERT_FILE = "russian_certs.pem"
 def create_payment_link(user_id: str, amount: str, purpose: str) -> str:
     """
     Создаёт платёжную ссылку в Точке.
-    Возвращает paymentLinkId или None при ошибке.
+    Возвращает URL оплаты или None при ошибке.
     """
     url = "https://enter.tochka.com/uapi/acquiring/v1.0/payments"
     payment_link_id = str(uuid.uuid4())
@@ -41,17 +42,30 @@ def create_payment_link(user_id: str, amount: str, purpose: str) -> str:
     }
 
     try:
+        logging.info(f"Создание платежа: amount={amount}, purpose={purpose}")
         response = requests.post(url, json=payload, headers=headers, timeout=30, verify=CERT_FILE)
+        
+        logging.info(f"Ответ Точки: status={response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
+            logging.info(f"Данные ответа: {json.dumps(data, ensure_ascii=False)[:500]}")
+            
             payment_url = data.get("Data", {}).get("paymentUrl") or data.get("Data", {}).get("paymentLink")
+            
             if payment_url:
-                # Сохраняем в БД
                 db.add_payment(user_id, "", float(amount), purpose, payment_link_id)
+                logging.info(f"✅ Платёжная ссылка создана: {payment_url[:100]}")
                 return payment_url
-        return None
+            else:
+                logging.error(f"❌ Нет paymentUrl в ответе: {json.dumps(data, ensure_ascii=False)[:500]}")
+                return None
+        else:
+            logging.error(f"❌ Ошибка Точки: {response.status_code} {response.text[:500]}")
+            return None
+
     except Exception as e:
-        print(f"❌ Ошибка создания платежа: {e}")
+        logging.error(f"❌ Ошибка создания платежа: {e}")
         return None
 
 
@@ -71,13 +85,13 @@ def setup_webhook():
     try:
         response = requests.put(url, json=payload, headers=headers, timeout=15, verify=CERT_FILE)
         if response.status_code == 200:
-            print("✅ Вебхук Точки зарегистрирован")
+            logging.info("✅ Вебхук Точки зарегистрирован")
             return True
         else:
-            print(f"❌ Ошибка регистрации вебхука: {response.status_code} {response.text}")
+            logging.error(f"❌ Ошибка регистрации вебхука: {response.status_code} {response.text}")
             return False
     except Exception as e:
-        print(f"❌ Ошибка подключения к Точке: {e}")
+        logging.error(f"❌ Ошибка подключения к Точке: {e}")
         return False
 
 
@@ -91,5 +105,5 @@ def process_webhook(raw_body: str) -> dict:
         decoded = base64.b64decode(payload_b64).decode('utf-8')
         return json.loads(decoded)
     except Exception as e:
-        print(f"❌ Ошибка декодирования вебхука: {e}")
+        logging.error(f"❌ Ошибка декодирования вебхука: {e}")
         return {}

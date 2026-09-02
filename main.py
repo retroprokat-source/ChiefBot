@@ -1,6 +1,8 @@
 # main.py
 import asyncio
 import logging
+from threading import Thread
+from flask import Flask
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -8,11 +10,23 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
+import os
 import config
 import database as db
 
 # ---------------------------- Настройка логирования ----------------------------
 logging.basicConfig(level=logging.INFO)
+
+# ---------------------------- HTTP-сервер для Render ----------------------------
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "ChiefBot is running!"
+
+def run_flask():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 # ---------------------------- Инициализация бота и диспетчера ----------------------------
 bot = Bot(token=config.BOT_TOKEN)
@@ -54,7 +68,7 @@ async def cmd_start(message: Message):
     username = message.from_user.username
     db.add_user(user_id, username)
     await message.answer(
-        "👋 Привет! Я ControllerBot — помощник для администраторов Telegram-каналов.\n\n"
+        "👋 Привет! Я ChiefBot — помощник для администраторов Telegram-каналов.\n\n"
         "Выберите действие в меню ниже:",
         reply_markup=main_keyboard()
     )
@@ -74,7 +88,6 @@ async def add_channel_start(message: Message, state: FSMContext):
 @router.message(AddChannel.waiting_for_forward)
 async def process_forwarded_message(message: Message, state: FSMContext):
     """Обработка пересланного сообщения из канала."""
-    # Проверяем, что сообщение переслано из канала
     if not message.forward_from_chat or message.forward_from_chat.type != "channel":
         await message.answer("❌ Это не пересланное сообщение из канала. Попробуйте ещё раз.")
         return
@@ -84,7 +97,6 @@ async def process_forwarded_message(message: Message, state: FSMContext):
     channel_username = message.forward_from_chat.username
     user_id = str(message.from_user.id)
 
-    # Проверяем, что пользователь является администратором канала
     try:
         member = await bot.get_chat_member(chat_id=int(chat_id), user_id=int(user_id))
         if member.status not in ("administrator", "creator"):
@@ -96,7 +108,6 @@ async def process_forwarded_message(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Проверяем лимит каналов для тарифа
     limits = db.check_limits(user_id)
     if limits["current_channels"] >= limits["allowed_channels"]:
         await message.answer(
@@ -106,7 +117,6 @@ async def process_forwarded_message(message: Message, state: FSMContext):
         await state.clear()
         return
 
-    # Сохраняем канал в базу и верифицируем
     db.add_channel(chat_id, user_id, channel_title, channel_username)
     db.verify_channel(chat_id)
 
@@ -132,7 +142,7 @@ async def process_post_content(message: Message, state: FSMContext):
 
     if message.photo:
         media_type = "photo"
-        media_file_id = message.photo[-1].file_id  # берём фото максимального размера
+        media_file_id = message.photo[-1].file_id
     elif message.video:
         media_type = "video"
         media_file_id = message.video.file_id
@@ -141,10 +151,8 @@ async def process_post_content(message: Message, state: FSMContext):
         await message.answer("❌ Пост пустой. Отправьте текст или фото.")
         return
 
-    # Сохраняем во временные данные состояния
     await state.update_data(content=content, media_type=media_type, media_file_id=media_file_id)
 
-    # Получаем каналы пользователя
     channels = db.get_user_channels(str(message.from_user.id))
     if not channels:
         await message.answer("❌ У вас нет подключённых каналов. Сначала добавьте канал.")
@@ -152,10 +160,8 @@ async def process_post_content(message: Message, state: FSMContext):
         return
 
     if len(channels) == 1:
-        # Если канал один — публикуем сразу
         await publish_post(message, state, channels[0]["id"])
     else:
-        # Если несколько — показываем инлайн-кнопки для выбора
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=ch["title"], callback_data=f"select_channel:{ch['id']}")]
             for ch in channels
@@ -178,7 +184,6 @@ async def publish_post(message: Message, state: FSMContext, channel_id: str):
         else:
             await bot.send_message(chat_id=int(channel_id), text=content)
 
-        # Сохраняем пост в БД
         db.add_post(channel_id, content, media_type, media_file_id, status="posted")
         await message.answer("✅ Пост успешно опубликован!")
     except Exception as e:
@@ -220,14 +225,12 @@ async def promo_command(message: Message, state: FSMContext):
 
     subcommand = args[1].strip()
     if subcommand == "create":
-        # Проверяем, админ ли пользователь
         if message.from_user.id not in config.ADMIN_IDS:
             await message.answer("⛔ У вас нет прав для создания промокодов.")
             return
         await message.answer("Введите код промокода (например, ABC123):")
         await state.set_state(PromoCreate.waiting_for_code)
     else:
-        # Активация промокода
         code = subcommand
         success, msg = db.activate_promocode(code, str(message.from_user.id))
         await message.answer(msg)
@@ -297,6 +300,11 @@ async def community_button(message: Message):
 # ---------------------------- Запуск бота ----------------------------
 async def main():
     db.init_db()
+    # Запускаем Flask в отдельном потоке
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

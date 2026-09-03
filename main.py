@@ -19,6 +19,21 @@ import services.payments as payments_service
 import services.subscriptions as subscriptions_service
 import services.scheduler as scheduler_service
 
+# ---------------------------- Часовые пояса России ----------------------------
+RUSSIA_TIMEZONES = {
+    "Калининград": 2,
+    "Москва": 3,
+    "Самара": 4,
+    "Екатеринбург": 5,
+    "Омск": 6,
+    "Новосибирск": 7,
+    "Иркутск": 8,
+    "Якутск": 9,
+    "Владивосток": 10,
+    "Магадан": 11,
+    "Камчатка": 12
+}
+
 # ---------------------------- Настройка логирования ----------------------------
 logging.basicConfig(level=logging.INFO)
 
@@ -38,7 +53,7 @@ def home():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
-    payments_service.setup_webhook()  # ← регистрация вебхука при запуске
+    payments_service.setup_webhook()
     app.run(host="0.0.0.0", port=port)
     
 @app.route('/webhook/tochka', methods=['GET', 'POST'])
@@ -73,14 +88,12 @@ def tochka_webhook():
                     expires_at = subscriptions_service.activate_subscription(user_id, channel_id)
                     logging.info(f"✅ Подписка активирована для user={user_id}, channel={channel_id}")
                     
-                    # Отправляем уведомление и создаём пригласительную ссылку
                     try:
                         channel_info = db.get_channel_by_id(channel_id)
                         channel_title = channel_info["title"] if channel_info else channel_id
                         
                         import requests as r
                         
-                        # Создаём пригласительную ссылку
                         invite_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/createChatInviteLink"
                         invite_response = r.post(invite_url, json={
                             "chat_id": int(channel_id),
@@ -91,13 +104,11 @@ def tochka_webhook():
                         if invite_response.status_code == 200:
                             invite_link = invite_response.json().get("result", {}).get("invite_link")
                         
-                        # Формируем текст сообщения
                         message_text = f"✅ Оплата получена!\n\nПодписка на канал «{channel_title}» активирована.\nДействует до: {expires_at}"
                         
                         if invite_link:
                             message_text += f"\n\n🔗 Вступите в канал:\n{invite_link}"
                         
-                        # Отправляем сообщение
                         telegram_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
                         r.post(telegram_url, json={
                             "chat_id": int(user_id),
@@ -130,6 +141,9 @@ class PromoCreate(StatesGroup):
     waiting_for_duration = State()
     waiting_for_uses = State()
 
+class TimezoneSetup(StatesGroup):
+    waiting_for_timezone = State()
+
 # ---------------------------- Клавиатуры ----------------------------
 def main_keyboard():
     """Главное меню бота."""
@@ -141,6 +155,20 @@ def main_keyboard():
         [KeyboardButton(text="💬 Сообщество админов")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def timezone_keyboard():
+    """Клавиатура выбора часового пояса."""
+    buttons = []
+    row = []
+    for city, offset in RUSSIA_TIMEZONES.items():
+        label = f"{city} UTC+{offset}"
+        row.append(InlineKeyboardButton(text=label, callback_data=f"tz:{offset}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 # ---------------------------- Обработчик команды /start ----------------------------
 @router.message(CommandStart())
@@ -247,9 +275,7 @@ async def process_post_content(message: Message, state: FSMContext):
         return
 
     if len(channels) == 1:
-        # Сохраняем канал в состояние
         await state.update_data(channel_id=channels[0]["id"])
-        await state.set_state(NewPost.waiting_for_channel)
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="publish_now")],
@@ -311,27 +337,99 @@ async def publish_now_callback(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await publish_post(callback.message, state, channel_id)
 
-
 @router.callback_query(F.data == "schedule_post")
 async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
     """Запрос времени для отложенного постинга."""
-    await callback.message.answer(
-        "Введите дату и время в формате:\n"
-        "ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
-        "Например: 05.09.2026 15:30"
-    )
-    await state.set_state(NewPost.waiting_for_time)
+    user_id = str(callback.from_user.id)
+    current_tz = db.get_user_timezone(user_id)
+    
+    if current_tz:
+        city = None
+        for c, offset in RUSSIA_TIMEZONES.items():
+            if str(offset) == str(current_tz):
+                city = c
+                break
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Изменить пояс", callback_data="change_timezone")]
+        ])
+        
+        await callback.message.answer(
+            f"Ваш часовой пояс: {city} (UTC+{current_tz})\n\n"
+            "Введите дату и время в формате:\n"
+            "ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
+            "Например: 05.09.2026 15:30",
+            reply_markup=keyboard
+        )
+        await state.set_state(NewPost.waiting_for_time)
+    else:
+        await state.update_data(planning_post=True)
+        await callback.message.answer(
+            "⚠️ Для планирования постов необходимо указать часовой пояс.\n\n"
+            "Выберите ваш регион:",
+            reply_markup=timezone_keyboard()
+        )
+        await state.set_state(TimezoneSetup.waiting_for_timezone)
+    
     await callback.answer()
 
+@router.callback_query(F.data == "change_timezone")
+async def change_timezone_callback(callback: CallbackQuery, state: FSMContext):
+    """Изменение часового пояса при планировании."""
+    await state.update_data(planning_post=True)
+    await callback.message.answer(
+        "Выберите новый часовой пояс:",
+        reply_markup=timezone_keyboard()
+    )
+    await state.set_state(TimezoneSetup.waiting_for_timezone)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("tz:"))
+async def timezone_selected(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора часового пояса."""
+    offset = callback.data.split(":")[1]
+    user_id = str(callback.from_user.id)
+    
+    db.set_user_timezone(user_id, offset)
+    
+    city = None
+    for c, off in RUSSIA_TIMEZONES.items():
+        if str(off) == str(offset):
+            city = c
+            break
+    
+    await callback.message.answer(f"✅ Часовой пояс установлен: {city} (UTC+{offset})")
+    await callback.answer()
+    
+    data = await state.get_data()
+    if data.get("planning_post"):
+        await callback.message.answer(
+            "Теперь введите дату и время для отложенного поста:\n"
+            "ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
+            "Например: 05.09.2026 15:30"
+        )
+        await state.set_state(NewPost.waiting_for_time)
+    else:
+        await state.clear()
 
 @router.message(NewPost.waiting_for_time)
 async def process_schedule_time(message: Message, state: FSMContext):
     """Обработка времени для отложенного постинга."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     
     try:
         scheduled_dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
-        scheduled_at = scheduled_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        user_id = str(message.from_user.id)
+        user_tz_offset = db.get_user_timezone(user_id)
+        
+        if user_tz_offset is None:
+            await message.answer("❌ Часовой пояс не установлен. Используйте /set_timezone")
+            await state.clear()
+            return
+        
+        utc_dt = scheduled_dt - timedelta(hours=int(user_tz_offset))
+        scheduled_at_utc = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
         
         data = await state.get_data()
         channel_id = data.get("channel_id")
@@ -339,19 +437,27 @@ async def process_schedule_time(message: Message, state: FSMContext):
         media_type = data.get("media_type")
         media_file_id = data.get("media_file_id")
         
-        # Сохраняем пост в БД со статусом scheduled
-        db.add_scheduled_post(channel_id, content, media_type, media_file_id, scheduled_at)
+        db.add_scheduled_post(channel_id, content, media_type, media_file_id, scheduled_at_utc)
         
-        # Добавляем задачу в планировщик
         await scheduler_service.schedule_post(
             channel_id=channel_id,
             content=content,
             media_type=media_type,
             media_file_id=media_file_id,
-            scheduled_at=scheduled_dt
+            scheduled_at=utc_dt
         )
         
-        await message.answer(f"✅ Пост запланирован на {message.text.strip()}")
+        city = None
+        for c, offset in RUSSIA_TIMEZONES.items():
+            if str(offset) == str(user_tz_offset):
+                city = c
+                break
+        
+        await message.answer(
+            f"✅ Пост запланирован:\n"
+            f"📅 {message.text.strip()} ({city}, UTC+{user_tz_offset})\n"
+            f"🌍 {utc_dt.strftime('%d.%m.%Y %H:%M')} (UTC)"
+        )
         await state.clear()
         
     except ValueError:
@@ -362,6 +468,34 @@ async def process_schedule_time(message: Message, state: FSMContext):
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=main_keyboard())
+
+# ---------------------------- Часовой пояс ----------------------------
+@router.message(Command("set_timezone"))
+async def cmd_set_timezone(message: Message, state: FSMContext):
+    """Команда смены часового пояса."""
+    user_id = str(message.from_user.id)
+    current_tz = db.get_user_timezone(user_id)
+    
+    if current_tz:
+        city = None
+        for c, offset in RUSSIA_TIMEZONES.items():
+            if str(offset) == str(current_tz):
+                city = c
+                break
+        
+        current_label = f"{city} (UTC+{current_tz})" if city else f"UTC+{current_tz}"
+        await message.answer(
+            f"Ваш текущий часовой пояс: {current_label}\n\n"
+            "Выберите новый пояс:",
+            reply_markup=timezone_keyboard()
+        )
+    else:
+        await message.answer(
+            "Выберите ваш часовой пояс:",
+            reply_markup=timezone_keyboard()
+        )
+    await state.set_state(TimezoneSetup.waiting_for_timezone)
+    await state.update_data(planning_post=False)
 
 # ---------------------------- Мои каналы ----------------------------
 @router.message(Command("my_channels"))
@@ -391,183 +525,4 @@ async def cmd_delete_channel(message: Message):
         return
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=ch["title"], callback_data=f"delete_channel:{ch['id']}")]
-        for ch in channels
-    ])
-    await message.answer("Выберите канал для удаления:", reply_markup=keyboard)
-
-@router.callback_query(F.data.startswith("delete_channel:"))
-async def delete_channel_callback(callback: CallbackQuery):
-    channel_id = callback.data.split(":")[1]
-    conn = sqlite3.connect(db.DB_PATH)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
-    conn.commit()
-    conn.close()
-    
-    await callback.message.answer("✅ Канал удалён.")
-    await callback.answer()
-
-# ---------------------------- Подписка на канал ----------------------------
-@router.message(Command("subscribe"))
-async def cmd_subscribe(message: Message):
-    user_id = str(message.from_user.id)
-    channels = db.get_user_channels(user_id)
-    
-    if not channels:
-        await message.answer("❌ У вас нет подключённых каналов. Сначала добавьте канал.")
-        return
-    
-    if len(channels) == 1:
-        channel_id = channels[0]["id"]
-        channel_title = channels[0]["title"]
-        
-        # Проверяем, есть ли уже активная подписка
-        existing = db.get_user_subscription(user_id, channel_id)
-        if existing:
-            await message.answer(
-                f"✅ У вас уже есть активная подписка на канал «{channel_title}».\n"
-                f"Действует до: {existing}"
-            )
-            return
-        
-        payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
-        
-        if payment_url:
-            await message.answer(
-                f"💳 Подписка на канал «{channel_title}»\n"
-                f"Цена: 1 ₽\n"
-                f"Длительность: 30 дней\n\n"
-                f"Оплатите по ссылке:\n{payment_url}"
-            )
-        else:
-            await message.answer("❌ Ошибка создания платежа.")
-    else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=ch["title"], callback_data=f"subscribe_channel:{ch['id']}")]
-            for ch in channels
-        ])
-        await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
-
-@router.callback_query(F.data.startswith("subscribe_channel:"))
-async def subscribe_channel_callback(callback: CallbackQuery):
-    channel_id = callback.data.split(":")[1]
-    user_id = str(callback.from_user.id)
-    
-    payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
-    
-    if payment_url:
-        await callback.message.answer(
-            f"💳 Подписка на канал\n"
-            f"Цена: 1 ₽\n"
-            f"Длительность: 30 дней\n\n"
-            f"Оплатите по ссылке:\n{payment_url}"
-        )
-    else:
-        await callback.message.answer("❌ Ошибка создания платежа.")
-    
-    await callback.answer()
-
-# ---------------------------- Промокоды ----------------------------
-@router.message(F.text == "🎁 Промокод")
-async def promo_info(message: Message):
-    await message.answer(
-        "Для активации промокода отправьте команду:\n"
-        "/promo <код>\n\n"
-        "Например: /promo ABC123"
-    )
-
-@router.message(Command("promo"))
-async def promo_command(message: Message, state: FSMContext):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer("Использование:\n/promo <код> — активация промокода\n/promo create — создать промокод (только для админов)")
-        return
-
-    subcommand = args[1].strip()
-    if subcommand == "create":
-        if message.from_user.id not in config.ADMIN_IDS:
-            await message.answer("⛔ У вас нет прав для создания промокодов.")
-            return
-        await message.answer("Введите код промокода (например, ABC123):")
-        await state.set_state(PromoCreate.waiting_for_code)
-    else:
-        code = subcommand
-        success, msg = db.activate_promocode(code, str(message.from_user.id))
-        await message.answer(msg)
-
-@router.message(PromoCreate.waiting_for_code)
-async def promo_code_entered(message: Message, state: FSMContext):
-    code = message.text.strip()
-    if not code:
-        await message.answer("Код не может быть пустым. Введите ещё раз.")
-        return
-    await state.update_data(code=code)
-    await message.answer("Выберите тариф:\n- pro\n- premium")
-    await state.set_state(PromoCreate.waiting_for_plan)
-
-@router.message(PromoCreate.waiting_for_plan)
-async def promo_plan_entered(message: Message, state: FSMContext):
-    plan = message.text.strip().lower()
-    if plan not in ("pro", "premium"):
-        await message.answer("Некорректный тариф. Введите pro или premium.")
-        return
-    await state.update_data(plan=plan)
-    await message.answer("Введите длительность подписки в днях (целое число):")
-    await state.set_state(PromoCreate.waiting_for_duration)
-
-@router.message(PromoCreate.waiting_for_duration)
-async def promo_duration_entered(message: Message, state: FSMContext):
-    try:
-        duration = int(message.text.strip())
-        if duration <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("Введите положительное целое число дней.")
-        return
-    await state.update_data(duration_days=duration)
-    await message.answer("Введите количество использований промокода (целое число):")
-    await state.set_state(PromoCreate.waiting_for_uses)
-
-@router.message(PromoCreate.waiting_for_uses)
-async def promo_uses_entered(message: Message, state: FSMContext):
-    try:
-        uses = int(message.text.strip())
-        if uses <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer("Введите положительное целое число.")
-        return
-
-    data = await state.get_data()
-    db.add_promocode(
-        code=data["code"],
-        plan=data["plan"],
-        duration_days=data["duration_days"],
-        uses_left=uses,
-        created_by=str(message.from_user.id)
-    )
-    await message.answer(f"✅ Промокод {data['code']} создан:\nТариф: {data['plan']}\nДней: {data['duration_days']}\nИспользований: {uses}")
-    await state.clear()
-
-# ---------------------------- Кнопка сообщества ----------------------------
-@router.message(F.text == "💬 Сообщество админов")
-async def community_button(message: Message):
-    await message.answer(
-        f"Присоединяйтесь к нашему сообществу администраторов Telegram-каналов:\n{config.COMMUNITY_CHAT_URL}"
-    )
-
-# ---------------------------- Запуск бота ----------------------------
-async def main():
-    db.init_db()
-    flask_thread = Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    # Запускаем планировщик
-    asyncio.create_task(scheduler_service.run_scheduler())
-    
-    await dp.start_polling(bot)
-    
-if __name__ == "__main__":
-    asyncio.run(main())
+        [InlineKeyboard

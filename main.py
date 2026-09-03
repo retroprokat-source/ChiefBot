@@ -18,6 +18,7 @@ import database as db
 import services.payments as payments_service
 import services.subscriptions as subscriptions_service
 import services.scheduler as scheduler_service
+import services.ai_tools as ai_tools
 
 # ---------------------------- Часовые пояса России ----------------------------
 RUSSIA_TIMEZONES = {
@@ -144,6 +145,11 @@ class PromoCreate(StatesGroup):
 class TimezoneSetup(StatesGroup):
     waiting_for_timezone = State()
 
+class AIGeneration(StatesGroup):
+    waiting_for_hashtag_text = State()
+    waiting_for_idea_topic = State()
+    
+
 # ---------------------------- Клавиатуры ----------------------------
 def main_keyboard():
     """Главное меню бота."""
@@ -152,6 +158,7 @@ def main_keyboard():
         [KeyboardButton(text="📝 Новый пост")],
         [KeyboardButton(text="💳 Подписка")],
         [KeyboardButton(text="🎁 Промокод")],
+        [KeyboardButton(text="✨ ИИ-хештеги"), KeyboardButton(text="💡 Идеи для постов")],
         [KeyboardButton(text="💬 Сообщество админов")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -689,6 +696,94 @@ async def community_button(message: Message):
     await message.answer(
         f"Присоединяйтесь к нашему сообществу администраторов Telegram-каналов:\n{config.COMMUNITY_CHAT_URL}"
     )
+
+# ---------------------------- ИИ-генерация ----------------------------
+@router.message(F.text == "✨ ИИ-хештеги")
+async def ai_hashtags_start(message: Message, state: FSMContext):
+    """Начало генерации хештегов."""
+    user_id = str(message.from_user.id)
+    
+    # Проверяем лимит
+    user = db.get_user(user_id)
+    plan = user.get("plan", "free") if user else "free"
+    
+    if plan == "free":
+        used = db.get_ai_generations_today(user_id)
+        if used >= 5:
+            await message.answer("❌ Вы исчерпали лимит ИИ-генераций на сегодня (5/день для Free).\nПовысьте тариф для безлимита.")
+            return
+    
+    await message.answer(
+        "Отправьте текст поста, для которого нужно сгенерировать хештеги:"
+    )
+    await state.set_state(AIGeneration.waiting_for_hashtag_text)
+
+
+@router.message(AIGeneration.waiting_for_hashtag_text)
+async def ai_hashtags_generate(message: Message, state: FSMContext):
+    """Генерация хештегов."""
+    post_text = message.text.strip()
+    
+    if not post_text:
+        await message.answer("❌ Текст пустой. Отправьте текст поста.")
+        return
+    
+    await message.answer("⏳ Генерирую хештеги...")
+    
+    hashtags = ai_tools.generate_hashtags(post_text)
+    
+    if hashtags:
+        db.increment_ai_generations(str(message.from_user.id))
+        result = " ".join(hashtags)
+        await message.answer(f"✅ Ваши хештеги:\n\n{result}")
+    else:
+        await message.answer("❌ Ошибка генерации. Попробуйте позже.")
+    
+    await state.clear()
+
+
+@router.message(F.text == "💡 Идеи для постов")
+async def ai_ideas_start(message: Message, state: FSMContext):
+    """Начало генерации идей."""
+    user_id = str(message.from_user.id)
+    
+    # Проверяем лимит
+    user = db.get_user(user_id)
+    plan = user.get("plan", "free") if user else "free"
+    
+    if plan == "free":
+        used = db.get_ai_generations_today(user_id)
+        if used >= 5:
+            await message.answer("❌ Вы исчерпали лимит ИИ-генераций на сегодня (5/день для Free).\nПовысьте тариф для безлимита.")
+            return
+    
+    await message.answer(
+        "На какую тему сгенерировать идеи для постов?\n"
+        "Например: криптовалюта, спорт, мода"
+    )
+    await state.set_state(AIGeneration.waiting_for_idea_topic)
+
+
+@router.message(AIGeneration.waiting_for_idea_topic)
+async def ai_ideas_generate(message: Message, state: FSMContext):
+    """Генерация идей для постов."""
+    topic = message.text.strip()
+    
+    if not topic:
+        await message.answer("❌ Тема пустая. Введите тему.")
+        return
+    
+    await message.answer("⏳ Генерирую идеи...")
+    
+    ideas = ai_tools.generate_post_ideas(topic)
+    
+    if ideas:
+        db.increment_ai_generations(str(message.from_user.id))
+        await message.answer(f"✅ Идеи для постов на тему «{topic}»:\n\n{ideas}")
+    else:
+        await message.answer("❌ Ошибка генерации. Попробуйте позже.")
+    
+    await state.clear()
 
 # ---------------------------- Запуск бота ----------------------------
 async def main():

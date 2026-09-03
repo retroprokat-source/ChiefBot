@@ -430,3 +430,86 @@ def increment_ai_generations(user_id: str):
     """, (user_id,))
     conn.commit()
     conn.close()
+
+
+# ---------------------------- Черновики ----------------------------
+
+def add_draft(channel_id: str, content: str, media_type: str = None, media_file_id: str = None):
+    """Сохраняет черновик поста."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO posts (channel_id, content, media_type, media_file_id, status)
+        VALUES (?, ?, ?, ?, 'draft')
+    """, (channel_id, content, media_type, media_file_id))
+    conn.commit()
+    conn.close()
+
+
+def get_drafts(user_id: str):
+    """Возвращает черновики пользователя."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.channel_id, p.content, p.media_type, p.media_file_id, p.created_at, c.title
+        FROM posts p
+        JOIN channels c ON p.channel_id = c.id
+        WHERE c.owner_id = ? AND p.status = 'draft'
+        ORDER BY p.created_at DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "channel_id": r[1],
+            "content": r[2],
+            "media_type": r[3],
+            "media_file_id": r[4],
+            "created_at": r[5],
+            "channel_title": r[6]
+        }
+        for r in rows
+    ]
+
+
+def get_draft_by_id(draft_id: int):
+    """Возвращает черновик по ID."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT p.id, p.channel_id, p.content, p.media_type, p.media_file_id, c.title
+        FROM posts p
+        JOIN channels c ON p.channel_id = c.id
+        WHERE p.id = ? AND p.status = 'draft'
+    """, (draft_id,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {
+            "id": row[0],
+            "channel_id": row[1],
+            "content": row[2],
+            "media_type": row[3],
+            "media_file_id": row[4],
+            "channel_title": row[5]
+        }
+    return None
+
+
+def delete_draft(draft_id: int):
+    """Удаляет черновик."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM posts WHERE id = ? AND status = 'draft'", (draft_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_draft_status(draft_id: int, status: str = "posted"):
+    """Обновляет статус черновика."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE posts SET status = ? WHERE id = ?", (status, draft_id))
+    conn.commit()
+    conn.close()

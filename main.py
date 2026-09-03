@@ -148,6 +148,9 @@ class TimezoneSetup(StatesGroup):
 class AIGeneration(StatesGroup):
     waiting_for_hashtag_text = State()
     waiting_for_idea_topic = State()
+
+class CustomPrice(StatesGroup):
+    waiting_for_price = State()
     
 
 # ---------------------------- Клавиатуры ----------------------------
@@ -606,17 +609,20 @@ async def cmd_subscribe(message: Message):
             )
             return
         
-        payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="1 ₽", callback_data=f"sub_price:{channel_id}:1"),
+             InlineKeyboardButton(text="5 ₽", callback_data=f"sub_price:{channel_id}:5")],
+            [InlineKeyboardButton(text="10 ₽", callback_data=f"sub_price:{channel_id}:10"),
+             InlineKeyboardButton(text="50 ₽", callback_data=f"sub_price:{channel_id}:50")],
+            [InlineKeyboardButton(text="100 ₽", callback_data=f"sub_price:{channel_id}:100")],
+            [InlineKeyboardButton(text="✏️ Своя цена", callback_data=f"custom_price:{channel_id}")]
+        ])
         
-        if payment_url:
-            await message.answer(
-                f"💳 Подписка на канал «{channel_title}»\n"
-                f"Цена: 1 ₽\n"
-                f"Длительность: 30 дней\n\n"
-                f"Оплатите по ссылке:\n{payment_url}"
-            )
-        else:
-            await message.answer("❌ Ошибка создания платежа.")
+        await message.answer(
+            f"💳 Подписка на канал «{channel_title}»\n\n"
+            "Выберите цену подписки:",
+            reply_markup=keyboard
+        )
     else:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=ch["title"], callback_data=f"subscribe_channel:{ch['id']}")]
@@ -629,12 +635,43 @@ async def subscribe_channel_callback(callback: CallbackQuery):
     channel_id = callback.data.split(":")[1]
     user_id = str(callback.from_user.id)
     
-    payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id)
+    channel_info = db.get_channel_by_id(channel_id)
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 ₽", callback_data=f"sub_price:{channel_id}:1"),
+         InlineKeyboardButton(text="5 ₽", callback_data=f"sub_price:{channel_id}:5")],
+        [InlineKeyboardButton(text="10 ₽", callback_data=f"sub_price:{channel_id}:10"),
+         InlineKeyboardButton(text="50 ₽", callback_data=f"sub_price:{channel_id}:50")],
+        [InlineKeyboardButton(text="100 ₽", callback_data=f"sub_price:{channel_id}:100")],
+        [InlineKeyboardButton(text="✏️ Своя цена", callback_data=f"custom_price:{channel_id}")]
+    ])
+    
+    await callback.message.answer(
+        f"💳 Подписка на канал «{channel_title}»\n\n"
+        "Выберите цену подписки:",
+        reply_markup=keyboard
+    )
+    
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("sub_price:"))
+async def sub_price_callback(callback: CallbackQuery):
+    """Обработка выбора цены подписки."""
+    parts = callback.data.split(":")
+    channel_id = parts[1]
+    price = parts[2]
+    user_id = str(callback.from_user.id)
+    
+    channel_info = db.get_channel_by_id(channel_id)
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
+    payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id, price)
     
     if payment_url:
         await callback.message.answer(
-            f"💳 Подписка на канал\n"
-            f"Цена: 1 ₽\n"
+            f"💳 Подписка на канал «{channel_title}»\n"
+            f"Цена: {price} ₽\n"
             f"Длительность: 30 дней\n\n"
             f"Оплатите по ссылке:\n{payment_url}"
         )
@@ -642,6 +679,50 @@ async def subscribe_channel_callback(callback: CallbackQuery):
         await callback.message.answer("❌ Ошибка создания платежа.")
     
     await callback.answer()
+
+@router.callback_query(F.data.startswith("custom_price:"))
+async def custom_price_callback(callback: CallbackQuery, state: FSMContext):
+    """Запрос своей цены."""
+    channel_id = callback.data.split(":")[1]
+    await state.update_data(channel_id=channel_id)
+    await callback.message.answer(
+        "Введите свою цену подписки в рублях (целое число, минимум 1 ₽):"
+    )
+    await state.set_state(CustomPrice.waiting_for_price)
+    await callback.answer()
+
+
+@router.message(CustomPrice.waiting_for_price)
+async def custom_price_entered(message: Message, state: FSMContext):
+    """Обработка своей цены."""
+    try:
+        price = int(message.text.strip())
+        if price < 1:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое число больше 0.")
+        return
+    
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    user_id = str(message.from_user.id)
+    
+    channel_info = db.get_channel_by_id(channel_id)
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
+    payment_url = subscriptions_service.create_subscription_payment(user_id, channel_id, str(price))
+    
+    if payment_url:
+        await message.answer(
+            f"💳 Подписка на канал «{channel_title}»\n"
+            f"Цена: {price} ₽\n"
+            f"Длительность: 30 дней\n\n"
+            f"Оплатите по ссылке:\n{payment_url}"
+        )
+    else:
+        await message.answer("❌ Ошибка создания платежа.")
+    
+    await state.clear()
 
 # ---------------------------- Промокоды ----------------------------
 @router.message(F.text == "🎁 Промокод")

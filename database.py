@@ -366,13 +366,13 @@ def get_subscriptions_expiring_in_days(days: int):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, channel_id, user_id, expires_at FROM subscribers
+        SELECT id, channel_id, user_id, expires_at, notified_3d, notified_1d FROM subscribers
         WHERE status = 'active'
         AND date(expires_at) = date(datetime('now', ?))
     """, (f"+{days} days",))
     rows = cur.fetchall()
     conn.close()
-    return [{"id": r[0], "channel_id": r[1], "user_id": r[2], "expires_at": r[3]} for r in rows]
+    return [{"id": r[0], "channel_id": r[1], "user_id": r[2], "expires_at": r[3], "notified_3d": r[4], "notified_1d": r[5]} for r in rows]
 
 
 def mark_notification_sent(subscription_id: int, days: int):

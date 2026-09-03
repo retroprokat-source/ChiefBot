@@ -4,22 +4,25 @@ import logging
 import database as db
 import services.payments as payments_service
 
-SUBSCRIPTION_PRICE = "1.00"  # Тестовая цена 1 ₽
+SUBSCRIPTION_PRICE = "1.00"  # Тестовая цена по умолчанию
 SUBSCRIPTION_DAYS = 30  # Длительность подписки в днях
 
 
-def create_subscription_payment(user_id: str, channel_id: str) -> str:
+def create_subscription_payment(user_id: str, channel_id: str, price: str = None) -> str:
     """
     Создаёт платёжную ссылку для подписки на канал.
     Сохраняет channel_id в платеже.
     Возвращает URL оплаты или None.
     """
+    if price is None:
+        price = SUBSCRIPTION_PRICE
+    
     purpose = f"Подписка на канал {channel_id} на {SUBSCRIPTION_DAYS} дней"
     
     payment_url = payments_service.create_payment_link(
         user_id=user_id,
         channel_id=channel_id,
-        amount=SUBSCRIPTION_PRICE,
+        amount=price,
         purpose=purpose
     )
     

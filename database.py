@@ -1,3 +1,4 @@
+```python
 # database.py
 import sqlite3
 from datetime import datetime, timedelta
@@ -399,3 +400,4 @@ def mark_notification_sent(subscription_id: int, days: int):
         cur.execute("UPDATE subscribers SET notified_1d = 1 WHERE id = ?", (subscription_id,))
     conn.commit()
     conn.close()
+```

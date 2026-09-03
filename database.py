@@ -51,7 +51,9 @@ def init_db():
             channel_id TEXT,
             user_id TEXT,
             expires_at TIMESTAMP,
-            status TEXT DEFAULT 'active'
+            status TEXT DEFAULT 'active',
+            notified_3d BOOLEAN DEFAULT 0,
+            notified_1d BOOLEAN DEFAULT 0
         )
     """)
 
@@ -93,14 +95,25 @@ def init_db():
     conn.close()
 
 def migrate():
-    """Добавляет поле timezone, если его нет."""
+    """Добавляет недостающие поля."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    
+    # Добавляем timezone в users
     cur.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cur.fetchall()]
     if "timezone" not in columns:
         cur.execute("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT NULL")
-        conn.commit()
+    
+    # Добавляем notified_3d и notified_1d в subscribers
+    cur.execute("PRAGMA table_info(subscribers)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "notified_3d" not in columns:
+        cur.execute("ALTER TABLE subscribers ADD COLUMN notified_3d BOOLEAN DEFAULT 0")
+    if "notified_1d" not in columns:
+        cur.execute("ALTER TABLE subscribers ADD COLUMN notified_1d BOOLEAN DEFAULT 0")
+    
+    conn.commit()
     conn.close()
 
 # ---------------------------- Пользователи ----------------------------
@@ -342,3 +355,36 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
+
+# ---------------------------- Напоминания об истечении подписки ----------------------------
+
+def get_subscriptions_expiring_in_days(days: int):
+    """
+    Возвращает подписки, которые истекают ровно через указанное количество дней.
+    days: 3 или 1
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, channel_id, user_id, expires_at FROM subscribers
+        WHERE status = 'active'
+        AND date(expires_at) = date(datetime('now', ?))
+    """, (f"+{days} days",))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"id": r[0], "channel_id": r[1], "user_id": r[2], "expires_at": r[3]} for r in rows]
+
+
+def mark_notification_sent(subscription_id: int, days: int):
+    """
+    Помечает, что уведомление за days дней отправлено.
+    days: 3 или 1
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    if days == 3:
+        cur.execute("UPDATE subscribers SET notified_3d = 1 WHERE id = ?", (subscription_id,))
+    elif days == 1:
+        cur.execute("UPDATE subscribers SET notified_1d = 1 WHERE id = ?", (subscription_id,))
+    conn.commit()
+    conn.close()

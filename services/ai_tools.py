@@ -22,7 +22,7 @@ def generate_hashtags(post_text: str) -> list:
     }
     
     payload = {
-        "model": "gemini-3.5-flash",
+        "model": "gemini-3.6-flash",
         "stream": False,
         "messages": [
             {"role": "user", "content": prompt}

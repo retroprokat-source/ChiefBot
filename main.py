@@ -211,6 +211,9 @@ async def drafts_list(message: Message):
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [
                 InlineKeyboardButton(text="📤 Опубликовать", callback_data=f"publish_draft:{draft['id']}"),
+                InlineKeyboardButton(text="⏰ Запланировать", callback_data=f"schedule_draft:{draft['id']}")
+            ],
+            [
                 InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_draft:{draft['id']}")
             ]
         ])
@@ -256,6 +259,62 @@ async def publish_draft_callback(callback: CallbackQuery):
         await callback.message.answer("✅ Черновик опубликован!")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка публикации: {e}")
+    
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("schedule_draft:"))
+async def schedule_draft_callback(callback: CallbackQuery, state: FSMContext):
+    """Планирование черновика."""
+    draft_id = int(callback.data.split(":")[1])
+    draft = db.get_draft_by_id(draft_id)
+    
+    if not draft:
+        await callback.message.answer("❌ Черновик не найден.")
+        await callback.answer()
+        return
+    
+    # Сохраняем данные черновика в состояние
+    await state.update_data(
+        channel_id=draft["channel_id"],
+        content=draft["content"],
+        media_type=draft["media_type"],
+        media_file_id=draft["media_file_id"]
+    )
+    
+    # Удаляем черновик, так как он превращается в отложенный пост
+    db.delete_draft(draft_id)
+    
+    user_id = str(callback.from_user.id)
+    current_tz = db.get_user_timezone(user_id)
+    
+    if current_tz:
+        city = None
+        for c, offset in RUSSIA_TIMEZONES.items():
+            if str(offset) == str(current_tz):
+                city = c
+                break
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Изменить пояс", callback_data="change_timezone")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_schedule")]
+        ])
+        
+        await callback.message.answer(
+            f"Ваш часовой пояс: {city} (UTC+{current_tz})\n\n"
+            "Введите дату и время в формате:\n"
+            "ДД.ММ.ГГГГ ЧЧ:ММ\n\n"
+            "Например: 05.09.2026 15:30",
+            reply_markup=keyboard
+        )
+        await state.set_state(NewPost.waiting_for_time)
+    else:
+        await state.update_data(planning_post=True)
+        await callback.message.answer(
+            "⚠️ Для планирования постов необходимо указать часовой пояс.\n\n"
+            "Выберите ваш регион:",
+            reply_markup=timezone_keyboard()
+        )
+        await state.set_state(TimezoneSetup.waiting_for_timezone)
     
     await callback.answer()
 

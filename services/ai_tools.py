@@ -1,5 +1,6 @@
 # services/ai_tools.py
 import requests
+import logging
 import config
 
 BASE_URL = config.BASE_URL
@@ -22,6 +23,7 @@ def generate_hashtags(post_text: str) -> list:
     
     payload = {
         "model": "gemini-3.5-flash",
+        "stream": False,
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -29,7 +31,13 @@ def generate_hashtags(post_text: str) -> list:
     }
     
     try:
+        logging.info(f"📤 Запрос хештегов к {BASE_URL}/chat/completions")
+        logging.info(f"Ключ: {config.OPENAI_API_KEY[:10]}...")
+        
         response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
+        
+        logging.info(f"📥 Статус: {response.status_code}")
+        logging.info(f"📥 Ответ: {response.text[:500]}")
         
         if response.status_code != 200:
             return []
@@ -38,6 +46,7 @@ def generate_hashtags(post_text: str) -> list:
         hashtags = [word for word in text.split() if word.startswith("#")]
         return hashtags
     except Exception as e:
+        logging.error(f"❌ Ошибка: {e}")
         return []
 
 
@@ -57,6 +66,7 @@ def generate_post_ideas(topic: str) -> str:
     
     payload = {
         "model": "gemini-3.5-flash",
+        "stream": False,
         "messages": [
             {"role": "user", "content": prompt}
         ],
@@ -64,11 +74,18 @@ def generate_post_ideas(topic: str) -> str:
     }
     
     try:
+        logging.info(f"📤 Запрос идей к {BASE_URL}/chat/completions")
+        logging.info(f"Ключ: {config.OPENAI_API_KEY[:10]}...")
+        
         response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
+        
+        logging.info(f"📥 Статус: {response.status_code}")
+        logging.info(f"📥 Ответ: {response.text[:500]}")
         
         if response.status_code != 200:
             return ""
         
         return response.json()["choices"][0]["message"]["content"]
     except Exception as e:
+        logging.error(f"❌ Ошибка: {e}")
         return ""

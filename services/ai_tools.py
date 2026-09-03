@@ -65,7 +65,7 @@ def generate_post_ideas(topic: str) -> str:
     }
     
     payload = {
-        "model": "gemini-3.5-flash",
+        "model": "gemini-3.6-flash",
         "stream": False,
         "messages": [
             {"role": "user", "content": prompt}

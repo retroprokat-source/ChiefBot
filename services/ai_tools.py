@@ -34,7 +34,7 @@ def generate_hashtags(post_text: str) -> list:
         logging.info(f"📤 Запрос хештегов к {BASE_URL}/chat/completions")
         logging.info(f"Ключ: {config.OPENAI_API_KEY[:10]}...")
         
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=60)
         
         logging.info(f"📥 Статус: {response.status_code}")
         logging.info(f"📥 Ответ: {response.text[:500]}")
@@ -77,7 +77,7 @@ def generate_post_ideas(topic: str) -> str:
         logging.info(f"📤 Запрос идей к {BASE_URL}/chat/completions")
         logging.info(f"Ключ: {config.OPENAI_API_KEY[:10]}...")
         
-        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=30)
+        response = requests.post(f"{BASE_URL}/chat/completions", headers=headers, json=payload, timeout=60)
         
         logging.info(f"📥 Статус: {response.status_code}")
         logging.info(f"📥 Ответ: {response.text[:500]}")

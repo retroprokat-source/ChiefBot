@@ -159,6 +159,7 @@ def main_keyboard():
     buttons = [
         [KeyboardButton(text="➕ Добавить канал")],
         [KeyboardButton(text="📝 Новый пост")],
+        [KeyboardButton(text="📂 Черновики")],
         [KeyboardButton(text="💳 Подписка")],
         [KeyboardButton(text="🎁 Промокод")],
         [KeyboardButton(text="✨ ИИ-хештеги"), KeyboardButton(text="💡 Идеи для постов")],
@@ -192,6 +193,80 @@ async def cmd_start(message: Message):
         "Выберите действие в меню ниже:",
         reply_markup=main_keyboard()
     )
+
+# ---------------------------- Черновики ----------------------------
+@router.message(F.text == "📂 Черновики")
+async def drafts_list(message: Message):
+    """Список черновиков."""
+    user_id = str(message.from_user.id)
+    drafts = db.get_drafts(user_id)
+    
+    if not drafts:
+        await message.answer("У вас нет черновиков.")
+        return
+    
+    for draft in drafts:
+        content_preview = draft["content"][:50] + "..." if len(draft["content"]) > 50 else draft["content"]
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📤 Опубликовать", callback_data=f"publish_draft:{draft['id']}"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data=f"delete_draft:{draft['id']}")
+            ]
+        ])
+        
+        await message.answer(
+            f"📝 Черновик #{draft['id']}\n"
+            f"Канал: {draft['channel_title']}\n"
+            f"Текст: {content_preview}",
+            reply_markup=keyboard
+        )
+
+@router.callback_query(F.data.startswith("publish_draft:"))
+async def publish_draft_callback(callback: CallbackQuery):
+    """Публикация черновика."""
+    draft_id = int(callback.data.split(":")[1])
+    draft = db.get_draft_by_id(draft_id)
+    
+    if not draft:
+        await callback.message.answer("❌ Черновик не найден.")
+        await callback.answer()
+        return
+    
+    try:
+        if draft["media_type"] == "photo":
+            await bot.send_photo(
+                chat_id=int(draft["channel_id"]),
+                photo=draft["media_file_id"],
+                caption=draft["content"]
+            )
+        elif draft["media_type"] == "video":
+            await bot.send_video(
+                chat_id=int(draft["channel_id"]),
+                video=draft["media_file_id"],
+                caption=draft["content"]
+            )
+        else:
+            await bot.send_message(
+                chat_id=int(draft["channel_id"]),
+                text=draft["content"]
+            )
+        
+        db.update_draft_status(draft_id, "posted")
+        await callback.message.answer("✅ Черновик опубликован!")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка публикации: {e}")
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_draft:"))
+async def delete_draft_callback(callback: CallbackQuery):
+    """Удаление черновика."""
+    draft_id = int(callback.data.split(":")[1])
+    db.delete_draft(draft_id)
+    await callback.message.answer("✅ Черновик удалён.")
+    await callback.answer()
 
 # ---------------------------- Кнопка Подписка ----------------------------
 @router.message(F.text == "💳 Подписка")
@@ -289,7 +364,8 @@ async def process_post_content(message: Message, state: FSMContext):
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="publish_now")],
-            [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")]
+            [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")],
+            [InlineKeyboardButton(text="💾 Сохранить в черновик", callback_data="save_draft")]
         ])
         await message.answer("Выберите действие:", reply_markup=keyboard)
     else:
@@ -328,7 +404,8 @@ async def channel_selected_callback(callback: CallbackQuery, state: FSMContext):
     await state.update_data(channel_id=channel_id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 Опубликовать сейчас", callback_data="publish_now")],
-        [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")]
+        [InlineKeyboardButton(text="⏰ Запланировать", callback_data="schedule_post")],
+        [InlineKeyboardButton(text="💾 Сохранить в черновик", callback_data="save_draft")]
     ])
     await callback.message.answer("Выберите действие:", reply_markup=keyboard)
     await callback.answer()
@@ -346,6 +423,25 @@ async def publish_now_callback(callback: CallbackQuery, state: FSMContext):
     
     await callback.answer()
     await publish_post(callback.message, state, channel_id)
+
+@router.callback_query(F.data == "save_draft")
+async def save_draft_callback(callback: CallbackQuery, state: FSMContext):
+    """Сохранение черновика."""
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    content = data.get("content", "")
+    media_type = data.get("media_type")
+    media_file_id = data.get("media_file_id")
+    
+    if not channel_id:
+        await callback.message.answer("❌ Канал не выбран.")
+        await callback.answer()
+        return
+    
+    db.add_draft(channel_id, content, media_type, media_file_id)
+    await callback.message.answer("✅ Пост сохранён в черновик!")
+    await state.clear()
+    await callback.answer()
 
 @router.callback_query(F.data == "schedule_post")
 async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):

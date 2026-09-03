@@ -358,7 +358,8 @@ async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
                 break
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Изменить пояс", callback_data="change_timezone")]
+            [InlineKeyboardButton(text="🔄 Изменить пояс", callback_data="change_timezone")],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_schedule")]
         ])
         
         await callback.message.answer(
@@ -378,6 +379,13 @@ async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
         )
         await state.set_state(TimezoneSetup.waiting_for_timezone)
     
+    await callback.answer()
+
+@router.callback_query(F.data == "cancel_schedule")
+async def cancel_schedule_callback(callback: CallbackQuery, state: FSMContext):
+    """Отмена планирования."""
+    await state.clear()
+    await callback.message.answer("Планирование отменено.", reply_markup=main_keyboard())
     await callback.answer()
 
 @router.callback_query(F.data == "change_timezone")
@@ -419,10 +427,37 @@ async def timezone_selected(callback: CallbackQuery, state: FSMContext):
     else:
         await state.clear()
 
+@router.message(NewPost.waiting_for_time, Command("cancel"))
+async def cancel_schedule_time(message: Message, state: FSMContext):
+    """Отмена планирования из состояния ожидания времени."""
+    await state.clear()
+    await message.answer("Планирование отменено.", reply_markup=main_keyboard())
+
+
 @router.message(NewPost.waiting_for_time)
 async def process_schedule_time(message: Message, state: FSMContext):
     """Обработка времени для отложенного постинга."""
     from datetime import datetime, timedelta
+
+    # Если нажата кнопка меню — сбрасываем состояние и переходим
+    if message.text in ("➕ Добавить канал", "📝 Новый пост", "💳 Подписка", "🎁 Промокод", "✨ ИИ-хештеги", "💡 Идеи для постов", "💬 Сообщество админов"):
+        await state.clear()
+        # Перенаправляем на нужный обработчик
+        if message.text == "➕ Добавить канал":
+            await add_channel_start(message, state)
+        elif message.text == "📝 Новый пост":
+            await new_post_start(message, state)
+        elif message.text == "💳 Подписка":
+            await subscribe_button(message)
+        elif message.text == "🎁 Промокод":
+            await promo_info(message)
+        elif message.text == "✨ ИИ-хештеги":
+            await ai_hashtags_start(message, state)
+        elif message.text == "💡 Идеи для постов":
+            await ai_ideas_start(message, state)
+        elif message.text == "💬 Сообщество админов":
+            await community_button(message)
+        return
     
     try:
         scheduled_dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")

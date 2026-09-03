@@ -43,11 +43,78 @@ async def check_expired_subscriptions():
             logging.error(f"❌ Ошибка: {e}")
 
 
+async def check_subscription_reminders():
+    """Проверяет подписки, которые истекают через 3 и 1 день, и отправляет напоминания."""
+    import requests as r
+    
+    # Проверяем за 3 дня
+    expiring_3d = db.get_subscriptions_expiring_in_days(3)
+    for sub in expiring_3d:
+        # Проверяем, не отправляли ли уже
+        if not sub.get("notified_3d"):
+            channel_info = db.get_channel_by_id(sub["channel_id"])
+            channel_title = channel_info["title"] if channel_info else sub["channel_id"]
+            
+            message_text = (
+                f"⚠️ Напоминание\n\n"
+                f"Ваша подписка на канал «{channel_title}» истекает через 3 дня.\n"
+                f"Чтобы продлить, используйте /subscribe"
+            )
+            
+            try:
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+                response = r.post(url, json={
+                    "chat_id": int(sub["user_id"]),
+                    "text": message_text
+                })
+                
+                if response.status_code == 200:
+                    db.mark_notification_sent(sub["id"], 3)
+                    logging.info(f"✅ Напоминание (3 дня) отправлено пользователю {sub['user_id']}")
+                else:
+                    logging.error(f"❌ Ошибка отправки напоминания (3 дня): {response.text}")
+            except Exception as e:
+                logging.error(f"❌ Ошибка отправки напоминания (3 дня): {e}")
+    
+    # Проверяем за 1 день
+    expiring_1d = db.get_subscriptions_expiring_in_days(1)
+    for sub in expiring_1d:
+        # Проверяем, не отправляли ли уже
+        if not sub.get("notified_1d"):
+            channel_info = db.get_channel_by_id(sub["channel_id"])
+            channel_title = channel_info["title"] if channel_info else sub["channel_id"]
+            
+            message_text = (
+                f"⚠️ Напоминание\n\n"
+                f"Ваша подписка на канал «{channel_title}» истекает завтра!\n"
+                f"Чтобы продлить, используйте /subscribe"
+            )
+            
+            try:
+                url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+                response = r.post(url, json={
+                    "chat_id": int(sub["user_id"]),
+                    "text": message_text
+                })
+                
+                if response.status_code == 200:
+                    db.mark_notification_sent(sub["id"], 1)
+                    logging.info(f"✅ Напоминание (1 день) отправлено пользователю {sub['user_id']}")
+                else:
+                    logging.error(f"❌ Ошибка отправки напоминания (1 день): {response.text}")
+            except Exception as e:
+                logging.error(f"❌ Ошибка отправки напоминания (1 день): {e}")
+    
+    logging.info("Проверка напоминаний завершена")
+
+
 async def run_scheduler():
     """Запускает периодическую проверку."""
     while True:
         await check_expired_subscriptions()
+        await check_subscription_reminders()
         await asyncio.sleep(3600)  # Проверка каждый час
+
 
 async def schedule_post(channel_id: str, content: str, media_type: str, media_file_id: str, scheduled_at):
     """Планирует пост на указанное время."""

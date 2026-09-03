@@ -399,3 +399,34 @@ def mark_notification_sent(subscription_id: int, days: int):
         cur.execute("UPDATE subscribers SET notified_1d = 1 WHERE id = ?", (subscription_id,))
     conn.commit()
     conn.close()
+
+# ---------------------------- ИИ-генерации ----------------------------
+
+def get_ai_generations_today(user_id: str) -> int:
+    """Возвращает количество ИИ-генераций за сегодня."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COALESCE(ai_generations, 0) FROM daily_usage
+        WHERE user_id = ? AND date = date('now')
+    """, (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def increment_ai_generations(user_id: str):
+    """Увеличивает счётчик ИИ-генераций за сегодня."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO daily_usage (user_id, date, ai_generations)
+        VALUES (?, date('now'), 1)
+        ON CONFLICT DO NOTHING
+    """, (user_id,))
+    cur.execute("""
+        UPDATE daily_usage SET ai_generations = ai_generations + 1
+        WHERE user_id = ? AND date = date('now')
+    """, (user_id,))
+    conn.commit()
+    conn.close()

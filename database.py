@@ -16,7 +16,8 @@ def init_db():
             username TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             plan TEXT DEFAULT 'free',
-            plan_expires DATE
+            plan_expires DATE,
+            timezone TEXT DEFAULT NULL
         )
     """)
 
@@ -91,6 +92,17 @@ def init_db():
     conn.commit()
     conn.close()
 
+def migrate():
+    """Добавляет поле timezone, если его нет."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "timezone" not in columns:
+        cur.execute("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT NULL")
+        conn.commit()
+    conn.close()
+
 # ---------------------------- Пользователи ----------------------------
 
 def add_user(user_id: str, username: str = None):
@@ -116,6 +128,25 @@ def update_user_plan(user_id: str, plan: str, expires_date: str = None):
     cur.execute("UPDATE users SET plan = ?, plan_expires = ? WHERE id = ?", (plan, expires_date, user_id))
     conn.commit()
     conn.close()
+
+# ---------------------------- Часовые пояса ----------------------------
+
+def set_user_timezone(user_id: str, timezone: str):
+    """Сохраняет часовой пояс пользователя."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET timezone = ? WHERE id = ?", (timezone, user_id))
+    conn.commit()
+    conn.close()
+
+def get_user_timezone(user_id: str):
+    """Возвращает часовой пояс пользователя или None."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT timezone FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
 
 # ---------------------------- Каналы ----------------------------
 
@@ -165,6 +196,17 @@ def add_post(channel_id: str, content: str, media_type: str = None, media_file_i
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("INSERT INTO posts (channel_id, content, media_type, media_file_id, status) VALUES (?, ?, ?, ?, ?)", (channel_id, content, media_type, media_file_id, status))
+    conn.commit()
+    conn.close()
+
+def add_scheduled_post(channel_id: str, content: str, media_type: str, media_file_id: str, scheduled_at: str):
+    """Сохраняет отложенный пост."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO posts (channel_id, content, media_type, media_file_id, scheduled_at, status)
+        VALUES (?, ?, ?, ?, ?, 'scheduled')
+    """, (channel_id, content, media_type, media_file_id, scheduled_at))
     conn.commit()
     conn.close()
 
@@ -300,14 +342,3 @@ def check_limits(user_id: str):
         "allowed_posts": limits[plan]["posts"],
         "current_posts": current_posts
     }
-
-def add_scheduled_post(channel_id: str, content: str, media_type: str, media_file_id: str, scheduled_at: str):
-    """Сохраняет отложенный пост."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO posts (channel_id, content, media_type, media_file_id, scheduled_at, status)
-        VALUES (?, ?, ?, ?, ?, 'scheduled')
-    """, (channel_id, content, media_type, media_file_id, scheduled_at))
-    conn.commit()
-    conn.close()

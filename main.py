@@ -184,13 +184,34 @@ def subscriber_keyboard():
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
+def role_selection_keyboard():
+    """Клавиатура выбора роли."""
+    buttons = [
+        [InlineKeyboardButton(text="👨‍💼 Администратор", callback_data="role:admin")],
+        [InlineKeyboardButton(text="👤 Подписчик", callback_data="role:subscriber")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def main_keyboard_for_user(user_id: str):
-    """Возвращает клавиатуру в зависимости от роли."""
+    """Возвращает клавиатуру в зависимости от роли и каналов."""
     channels = db.get_user_channels(user_id)
+    role = db.get_user_role(user_id)
+    
     if channels:
+        # Есть каналы — полное админское меню + подписка
         return admin_keyboard()
+    elif role == "admin":
+        # Админ без каналов — меню с добавлением канала
+        buttons = [
+            [KeyboardButton(text="➕ Добавить канал")],
+            [KeyboardButton(text="💬 Сообщество админов")]
+        ]
+        return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
     else:
+        # Подписчик или роль не выбрана
         return subscriber_keyboard()
+
 
 def timezone_keyboard():
     """Клавиатура выбора часового пояса."""
@@ -215,19 +236,68 @@ async def cmd_start(message: Message):
     db.add_user(user_id, username)
     
     channels = db.get_user_channels(user_id)
+    role = db.get_user_role(user_id)
+    
     if channels:
         await message.answer(
-            "👋 Привет! Вы администратор канала.\n\n"
-            "Выберите действие в меню ниже:",
+            "👋 С возвращением!\n\n"
+            "Вы подключены как администратор.\n"
+            "Выберите действие:",
             reply_markup=admin_keyboard()
+        )
+    elif role == "admin":
+        await message.answer(
+            "👋 Привет, администратор!\n\n"
+            "Чтобы начать, добавьте канал:\n"
+            "1. Добавьте меня в администраторы канала\n"
+            "2. Перешлите любое сообщение из канала\n\n"
+            "Выберите действие:",
+            reply_markup=main_keyboard_for_user(user_id)
+        )
+    elif role == "subscriber":
+        await message.answer(
+            "👋 Привет!\n\n"
+            "Здесь вы можете получить доступ к закрытым каналам.\n"
+            "Выберите канал для подписки:",
+            reply_markup=subscriber_keyboard()
         )
     else:
         await message.answer(
-            "👋 Привет! Я ChiefBot.\n\n"
-            "Здесь можно получить доступ к закрытым каналам.\n"
-            "Выберите действие:",
+            "👋 Привет! Я ChiefBot — помощник для администраторов Telegram-каналов.\n\n"
+            "Я умею:\n"
+            "• Публиковать посты (сейчас + отложенные)\n"
+            "• Управлять платными подписками\n"
+            "• Генерировать хештеги и идеи для постов\n"
+            "• Вести статистику канала\n\n"
+            "Кем вы являетесь?",
+            reply_markup=role_selection_keyboard()
+        )
+
+@router.callback_query(F.data.startswith("role:"))
+async def role_selected(callback: CallbackQuery):
+    """Обработка выбора роли."""
+    role = callback.data.split(":")[1]
+    user_id = str(callback.from_user.id)
+    db.set_user_role(user_id, role)
+    
+    if role == "admin":
+        await callback.message.answer(
+            "✅ Вы зарегистрированы как администратор.\n\n"
+            "Чтобы начать, добавьте канал:\n"
+            "1. Добавьте меня в администраторы канала (права: публикация)\n"
+            "2. Перешлите сюда любое сообщение из канала\n\n"
+            "Нажмите «➕ Добавить канал» для начала.",
+            reply_markup=main_keyboard_for_user(user_id)
+        )
+    else:
+        await callback.message.answer(
+            "✅ Вы зарегистрированы как подписчик.\n\n"
+            "Здесь вы можете получить доступ к закрытым каналам.\n"
+            "Выберите канал для подписки:",
             reply_markup=subscriber_keyboard()
         )
+    
+    await callback.answer()
         
 # ---------------------------- Черновики ----------------------------
 @router.message(F.text == "📂 Черновики")
@@ -644,8 +714,10 @@ async def stats_button(message: Message):
     await cmd_stats(message)
 
 # ---------------------------- Добавление канала ----------------------------
-@router.message(F.text == "➕ Добавить канал")
-async def add_channel_start(message: Message, state: FSMContext):
+@router.message(Command("add_channel"))
+async def cmd_add_channel(message: Message, state: FSMContext):
+    """Команда добавления канала."""
+    await add_channel_start(message, state)
     """Начало процесса добавления канала."""
     await message.answer(
         "Чтобы добавить канал, выполните два шага:\n"
@@ -689,8 +761,13 @@ async def process_forwarded_message(message: Message, state: FSMContext):
 
     db.add_channel(chat_id, user_id, channel_title, channel_username)
     db.verify_channel(chat_id)
+    db.set_user_role(user_id, "admin")
 
-    await message.answer(f"✅ Канал «{channel_title}» успешно подключён и верифицирован!")
+    await message.answer(
+        f"✅ Канал «{channel_title}» успешно подключён и верифицирован!\n\n"
+        "Теперь вам доступны все функции администратора.",
+        reply_markup=admin_keyboard()
+    )
     await state.clear()
 
 # ---------------------------- Создание поста ----------------------------
@@ -1097,7 +1174,10 @@ async def subscribe_button(message: Message):
     channels = db.get_all_channels_for_subscribe()
     
     if not channels:
-        await message.answer("Пока нет доступных каналов для подписки.")
+        await message.answer(
+            "😔 Пока нет доступных каналов для подписки.\n"
+            "Загляните позже!"
+        )
         return
     
     if len(channels) == 1:
@@ -1107,7 +1187,11 @@ async def subscribe_button(message: Message):
             [InlineKeyboardButton(text=ch["title"], callback_data=f"sub_info:{ch['id']}")]
             for ch in channels
         ])
-        await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
+        await message.answer(
+            "🔒 Доступные каналы для подписки:\n\n"
+            "Выберите канал, чтобы увидеть условия.",
+            reply_markup=keyboard
+        )
 
 
 async def show_subscription_info(message: Message, channel):
@@ -1124,7 +1208,8 @@ async def show_subscription_info(message: Message, channel):
         f"💳 Подписка на канал «{channel['title']}»\n\n"
         f"💰 Стоимость: {price}\n"
         f"🔗 Оплата: {payment_link}\n\n"
-        f"📝 Инструкция:\n{instructions}",
+        f"📝 Как получить доступ:\n{instructions}\n\n"
+        "После оплаты нажмите «Я оплатил» — администратор проверит и выдаст доступ.",
         reply_markup=keyboard
     )
 

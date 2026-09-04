@@ -635,7 +635,8 @@ def get_pending_requests(channel_id: str):
             "channel_id": r[1],
             "user_id": r[2],
             "created_at": r[3],
-            "channel_title": r[4]
+            "channel_title": r[4],
+            "username": r[5]
         }
         for r in rows
     ]

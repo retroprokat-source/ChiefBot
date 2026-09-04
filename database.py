@@ -57,7 +57,8 @@ def init_db():
             expires_at TIMESTAMP,
             status TEXT DEFAULT 'active',
             notified_3d BOOLEAN DEFAULT 0,
-            notified_1d BOOLEAN DEFAULT 0
+            notified_1d BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -132,6 +133,12 @@ def migrate():
     columns = [col[1] for col in cur.fetchall()]
     if "role" not in columns:
         cur.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT NULL")
+
+    # Добавляем created_at в subscribers
+    cur.execute("PRAGMA table_info(subscribers)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "created_at" not in columns:
+        cur.execute("ALTER TABLE subscribers ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
     conn.commit()
     conn.close()

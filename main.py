@@ -151,21 +151,46 @@ class AIGeneration(StatesGroup):
 
 class CustomPrice(StatesGroup):
     waiting_for_price = State()
+
+class SubscriptionSettings(StatesGroup):
+    waiting_for_channel = State()
+    waiting_for_price = State()
+    waiting_for_payment_link = State()
+    waiting_for_instructions = State()
     
 
 # ---------------------------- Клавиатуры ----------------------------
-def main_keyboard():
-    """Главное меню бота."""
+def admin_keyboard():
+    """Меню администратора."""
     buttons = [
         [KeyboardButton(text="➕ Добавить канал")],
         [KeyboardButton(text="📝 Новый пост")],
         [KeyboardButton(text="📂 Черновики")],
-        [KeyboardButton(text="💳 Подписка")],
+        [KeyboardButton(text="👥 Подписчики")],
+        [KeyboardButton(text="⚙️ Настройка подписки")],
         [KeyboardButton(text="🎁 Промокод")],
         [KeyboardButton(text="✨ ИИ-хештеги"), KeyboardButton(text="💡 Идеи для постов")],
         [KeyboardButton(text="💬 Сообщество админов")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def subscriber_keyboard():
+    """Меню подписчика."""
+    buttons = [
+        [KeyboardButton(text="💳 Подписаться")],
+        [KeyboardButton(text="💬 Сообщество админов")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def main_keyboard_for_user(user_id: str):
+    """Возвращает клавиатуру в зависимости от роли."""
+    channels = db.get_user_channels(user_id)
+    if channels:
+        return admin_keyboard()
+    else:
+        return subscriber_keyboard()
 
 def timezone_keyboard():
     """Клавиатура выбора часового пояса."""
@@ -188,12 +213,22 @@ async def cmd_start(message: Message):
     user_id = str(message.from_user.id)
     username = message.from_user.username
     db.add_user(user_id, username)
-    await message.answer(
-        "👋 Привет! Я ChiefBot — помощник для администраторов Telegram-каналов.\n\n"
-        "Выберите действие в меню ниже:",
-        reply_markup=main_keyboard()
-    )
-
+    
+    channels = db.get_user_channels(user_id)
+    if channels:
+        await message.answer(
+            "👋 Привет! Вы администратор канала.\n\n"
+            "Выберите действие в меню ниже:",
+            reply_markup=admin_keyboard()
+        )
+    else:
+        await message.answer(
+            "👋 Привет! Я ChiefBot.\n\n"
+            "Здесь можно получить доступ к закрытым каналам.\n"
+            "Выберите действие:",
+            reply_markup=subscriber_keyboard()
+        )
+        
 # ---------------------------- Черновики ----------------------------
 @router.message(F.text == "📂 Черновики")
 async def drafts_list(message: Message):
@@ -327,11 +362,280 @@ async def delete_draft_callback(callback: CallbackQuery):
     await callback.message.answer("✅ Черновик удалён.")
     await callback.answer()
 
-# ---------------------------- Кнопка Подписка ----------------------------
-@router.message(F.text == "💳 Подписка")
-async def subscribe_button(message: Message):
-    """Обработка кнопки Подписка."""
-    await cmd_subscribe(message)
+# ---------------------------- Подписчики ----------------------------
+@router.message(F.text == "👥 Подписчики")
+async def subscribers_button(message: Message):
+    """Список заявок и активных подписчиков."""
+    user_id = str(message.from_user.id)
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("❌ У вас нет каналов.")
+        return
+    
+    if len(channels) == 1:
+        await show_subscribers_menu(message, channels[0]["id"])
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"subs_channel:{ch['id']}")]
+            for ch in channels
+        ])
+        await message.answer("Выберите канал:", reply_markup=keyboard)
+
+
+async def show_subscribers_menu(message: Message, channel_id: str):
+    """Показывает меню подписчиков."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ Заявки", callback_data=f"subs_pending:{channel_id}")],
+        [InlineKeyboardButton(text="✅ Активные", callback_data=f"subs_active:{channel_id}")],
+        [InlineKeyboardButton(text="⏰ Истёкшие", callback_data=f"subs_expired:{channel_id}")]
+    ])
+    await message.answer("Выберите категорию:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("subs_channel:"))
+async def subs_channel_callback(callback: CallbackQuery):
+    """Обработка выбора канала для подписчиков."""
+    channel_id = callback.data.split(":")[1]
+    await show_subscribers_menu(callback.message, channel_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subs_pending:"))
+async def subs_pending_callback(callback: CallbackQuery):
+    """Список заявок на подписку."""
+    channel_id = callback.data.split(":")[1]
+    pending = db.get_pending_requests(channel_id)
+    
+    if not pending:
+        await callback.message.answer("Нет заявок на подписку.")
+        await callback.answer()
+        return
+    
+    for req in pending:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Выдать доступ", callback_data=f"approve_sub:{req['id']}")],
+            [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_sub:{req['id']}")]
+        ])
+        
+        await callback.message.answer(
+            f"🔔 Заявка #{req['id']}\n"
+            f"Пользователь: @{req['username'] or 'без username'}\n"
+            f"Канал: {req['channel_title']}\n"
+            f"Дата: {req['created_at']}",
+            reply_markup=keyboard
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subs_active:"))
+async def subs_active_callback(callback: CallbackQuery):
+    """Список активных подписчиков."""
+    channel_id = callback.data.split(":")[1]
+    active = db.get_active_subscribers(channel_id)
+    
+    if not active:
+        await callback.message.answer("Нет активных подписчиков.")
+        await callback.answer()
+        return
+    
+    for sub in active:
+        await callback.message.answer(
+            f"✅ Подписчик: {sub['user_id']}\n"
+            f"Действует до: {sub['expires_at']}"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("subs_expired:"))
+async def subs_expired_callback(callback: CallbackQuery):
+    """Список истёкших подписчиков."""
+    channel_id = callback.data.split(":")[1]
+    expired = db.get_expired_subscribers_by_channel(channel_id)
+    
+    if not expired:
+        await callback.message.answer("Нет истёкших подписчиков.")
+        await callback.answer()
+        return
+    
+    for sub in expired:
+        await callback.message.answer(
+            f"⏰ Подписчик: {sub['user_id']}\n"
+            f"Истекла: {sub['expires_at']}"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("approve_sub:"))
+async def approve_sub_callback(callback: CallbackQuery):
+    """Выдача доступа."""
+    request_id = int(callback.data.split(":")[1])
+    result = db.approve_subscription_request(request_id)
+    
+    if result:
+        channel_id = result["channel_id"]
+        user_id = result["user_id"]
+        
+        # Добавляем в канал
+        try:
+            import requests as r
+            invite_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/createChatInviteLink"
+            invite_response = r.post(invite_url, json={
+                "chat_id": int(channel_id),
+                "member_limit": 1
+            })
+            
+            invite_link = None
+            if invite_response.status_code == 200:
+                invite_link = invite_response.json().get("result", {}).get("invite_link")
+            
+            channel_info = db.get_channel_by_id(channel_id)
+            channel_title = channel_info["title"] if channel_info else channel_id
+            
+            message_text = f"✅ Доступ в канал «{channel_title}» предоставлен!"
+            if invite_link:
+                message_text += f"\n\n🔗 Вступите по ссылке:\n{invite_link}"
+            
+            telegram_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+            r.post(telegram_url, json={
+                "chat_id": int(user_id),
+                "text": message_text
+            })
+            
+            await callback.message.answer(f"✅ Доступ выдан пользователю {user_id}")
+        except Exception as e:
+            await callback.message.answer(f"❌ Ошибка выдачи доступа: {e}")
+    else:
+        await callback.message.answer("❌ Заявка не найдена.")
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reject_sub:"))
+async def reject_sub_callback(callback: CallbackQuery):
+    """Отклонение заявки."""
+    request_id = int(callback.data.split(":")[1])
+    db.reject_subscription_request(request_id)
+    await callback.message.answer("✅ Заявка отклонена.")
+    await callback.answer()
+
+# ---------------------------- Настройка подписки ----------------------------
+@router.message(F.text == "⚙️ Настройка подписки")
+async def subscription_settings_start(message: Message, state: FSMContext):
+    """Настройка подписки канала."""
+    user_id = str(message.from_user.id)
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("❌ У вас нет каналов.")
+        return
+    
+    if len(channels) == 1:
+        await show_subscription_settings(message, channels[0]["id"])
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"sub_settings_channel:{ch['id']}")]
+            for ch in channels
+        ])
+        await message.answer("Выберите канал:", reply_markup=keyboard)
+
+
+async def show_subscription_settings(message: Message, channel_id: str):
+    """Показывает текущие настройки подписки."""
+    settings = db.get_channel_subscription_settings(channel_id)
+    channel_info = db.get_channel_by_id(channel_id)
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"set_sub_price:{channel_id}")],
+        [InlineKeyboardButton(text="🔗 Изменить ссылку", callback_data=f"set_sub_link:{channel_id}")],
+        [InlineKeyboardButton(text="📝 Изменить инструкцию", callback_data=f"set_sub_instr:{channel_id}")]
+    ])
+    
+    await message.answer(
+        f"⚙️ Настройки подписки для канала «{channel_title}»\n\n"
+        f"💰 Цена: {settings['price'] or 'не указана'}\n"
+        f"🔗 Ссылка: {settings['payment_link'] or 'не указана'}\n"
+        f"📝 Инструкция: {settings['instructions'] or 'не указана'}",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("sub_settings_channel:"))
+async def sub_settings_channel_callback(callback: CallbackQuery):
+    """Выбор канала для настройки."""
+    channel_id = callback.data.split(":")[1]
+    await show_subscription_settings(callback.message, channel_id)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_sub_price:"))
+async def set_sub_price_callback(callback: CallbackQuery, state: FSMContext):
+    """Запрос новой цены."""
+    channel_id = callback.data.split(":")[1]
+    await state.update_data(channel_id=channel_id)
+    await callback.message.answer("Введите цену подписки (например, 200):")
+    await state.set_state(SubscriptionSettings.waiting_for_price)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_sub_link:"))
+async def set_sub_link_callback(callback: CallbackQuery, state: FSMContext):
+    """Запрос новой ссылки."""
+    channel_id = callback.data.split(":")[1]
+    await state.update_data(channel_id=channel_id)
+    await callback.message.answer("Введите ссылку на оплату:")
+    await state.set_state(SubscriptionSettings.waiting_for_payment_link)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("set_sub_instr:"))
+async def set_sub_instr_callback(callback: CallbackQuery, state: FSMContext):
+    """Запрос новой инструкции."""
+    channel_id = callback.data.split(":")[1]
+    await state.update_data(channel_id=channel_id)
+    await callback.message.answer("Введите инструкцию для подписчика:")
+    await state.set_state(SubscriptionSettings.waiting_for_instructions)
+    await callback.answer()
+
+
+@router.message(SubscriptionSettings.waiting_for_price)
+async def sub_price_entered(message: Message, state: FSMContext):
+    """Сохранение цены."""
+    price = message.text.strip()
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    db.update_channel_subscription_settings(channel_id, price=price)
+    await message.answer(f"✅ Цена подписки обновлена: {price} ₽")
+    await state.clear()
+    await show_subscription_settings(message, channel_id)
+
+
+@router.message(SubscriptionSettings.waiting_for_payment_link)
+async def sub_link_entered(message: Message, state: FSMContext):
+    """Сохранение ссылки."""
+    link = message.text.strip()
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    db.update_channel_subscription_settings(channel_id, payment_link=link)
+    await message.answer("✅ Ссылка на оплату обновлена")
+    await state.clear()
+    await show_subscription_settings(message, channel_id)
+
+
+@router.message(SubscriptionSettings.waiting_for_instructions)
+async def sub_instructions_entered(message: Message, state: FSMContext):
+    """Сохранение инструкции."""
+    instructions = message.text.strip()
+    data = await state.get_data()
+    channel_id = data.get("channel_id")
+    db.update_channel_subscription_settings(channel_id, instructions=instructions)
+    await message.answer("✅ Инструкция обновлена")
+    await state.clear()
+    await show_subscription_settings(message, channel_id)
 
 # ---------------------------- Добавление канала ----------------------------
 @router.message(F.text == "➕ Добавить канал")
@@ -543,7 +847,7 @@ async def schedule_post_callback(callback: CallbackQuery, state: FSMContext):
 async def cancel_schedule_callback(callback: CallbackQuery, state: FSMContext):
     """Отмена планирования."""
     await state.clear()
-    await callback.message.answer("Планирование отменено.", reply_markup=main_keyboard())
+    await callback.message.answer("Планирование отменено.", reply_markup=main_keyboard_for_user(str(callback.from_user.id)))
     await callback.answer()
 
 @router.callback_query(F.data == "change_timezone")
@@ -589,7 +893,7 @@ async def timezone_selected(callback: CallbackQuery, state: FSMContext):
 async def cancel_schedule_time(message: Message, state: FSMContext):
     """Отмена планирования из состояния ожидания времени."""
     await state.clear()
-    await message.answer("Планирование отменено.", reply_markup=main_keyboard())
+    await message.answer("Планирование отменено.", reply_markup=main_keyboard_for_user(str(message.from_user.id)))
 
 
 @router.message(NewPost.waiting_for_time)
@@ -667,7 +971,7 @@ async def process_schedule_time(message: Message, state: FSMContext):
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Действие отменено.", reply_markup=main_keyboard())
+    await message.answer("Действие отменено.", reply_markup=main_keyboard_for_user(str(message.from_user.id)))
 
 # ---------------------------- Часовой пояс ----------------------------
 @router.message(Command("set_timezone"))

@@ -493,6 +493,15 @@ async def subscribers_button(message: Message):
             reply_markup=keyboard
         )
 
+async def show_subscribers_menu(message: Message, channel_id: str):
+    """Показывает меню подписчиков."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ Заявки", callback_data=f"subs_pending:{channel_id}")],
+        [InlineKeyboardButton(text="✅ Активные", callback_data=f"subs_active:{channel_id}")],
+        [InlineKeyboardButton(text="⏰ Истёкшие", callback_data=f"subs_expired:{channel_id}")]
+    ])
+    await message.answer("Выберите категорию:", reply_markup=keyboard)
+
 
 async def show_subscription_settings(message: Message, channel_id: str):
     """Показывает текущие настройки подписки."""
@@ -819,18 +828,6 @@ async def stats_button(message: Message):
 @router.message(Command("add_channel"))
 async def cmd_add_channel(message: Message, state: FSMContext):
     """Команда добавления канала."""
-    await message.answer(
-        "Чтобы добавить канал:\n\n"
-        "1. Добавьте меня в администраторы канала (права: публикация)\n"
-        "2. Перешлите сюда любое сообщение из этого канала\n\n"
-        "Пересылайте сообщение прямо сейчас."
-    )
-    await state.set_state(AddChannel.waiting_for_forward)
-
-
-@router.message(F.text == "➕ Добавить канал")
-async def add_channel_start(message: Message, state: FSMContext):
-    """Кнопка добавления канала."""
     await message.answer(
         "Чтобы добавить канал:\n\n"
         "1. Добавьте меня в администраторы канала (права: публикация)\n"

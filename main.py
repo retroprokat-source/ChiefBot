@@ -168,6 +168,7 @@ def admin_keyboard():
         [KeyboardButton(text="👥 Подписчики")],
         [KeyboardButton(text="⚙️ Настройка подписки")],
         [KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="💳 Подписаться"), KeyboardButton(text="👤 Профиль")],
         [KeyboardButton(text="🎁 Промокод")],
         [KeyboardButton(text="✨ ИИ-хештеги"), KeyboardButton(text="💡 Идеи для постов")],
         [KeyboardButton(text="💬 Сообщество админов")]
@@ -178,7 +179,8 @@ def admin_keyboard():
 def subscriber_keyboard():
     """Меню подписчика."""
     buttons = [
-        [KeyboardButton(text="💳 Подписаться")],
+        [KeyboardButton(text="💳 Подписаться"), KeyboardButton(text="👤 Профиль")],
+        [KeyboardButton(text="➕ Добавить канал")],
         [KeyboardButton(text="💬 Сообщество админов")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -227,6 +229,31 @@ def timezone_keyboard():
         buttons.append(row)
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# ---------------------------- Профиль ----------------------------
+@router.message(F.text == "👤 Профиль")
+async def profile_button(message: Message):
+    """Показывает профиль пользователя."""
+    user_id = str(message.from_user.id)
+    user = db.get_user(user_id)
+    role = db.get_user_role(user_id)
+    channels = db.get_user_channels(user_id)
+    
+    plan = user.get("plan", "free") if user else "free"
+    plan_expires = user.get("plan_expires") if user else None
+    
+    limits = db.check_limits(user_id)
+    
+    role_text = "Администратор" if role == "admin" or channels else "Подписчик"
+    
+    await message.answer(
+        f"👤 Ваш профиль\n\n"
+        f"Роль: {role_text}\n"
+        f"Тариф: {plan.upper()}\n"
+        f"Действует до: {plan_expires or 'бессрочно'}\n"
+        f"Каналов: {limits['current_channels']} / {limits['allowed_channels']}\n"
+        f"Постов: {limits['current_posts']} / {limits['allowed_posts']}"
+    )
+
 # ---------------------------- Обработчик команды /start ----------------------------
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -255,12 +282,25 @@ async def cmd_start(message: Message):
             reply_markup=main_keyboard_for_user(user_id)
         )
     elif role == "subscriber":
-        await message.answer(
-            "👋 Привет!\n\n"
-            "Здесь вы можете получить доступ к закрытым каналам.\n"
-            "Выберите канал для подписки:",
-            reply_markup=subscriber_keyboard()
-        )
+        # Проверяем активные подписки
+        subscriptions = db.get_user_active_subscriptions(user_id)
+        
+        if subscriptions:
+            sub_text = "Ваши активные подписки:\n\n"
+            for sub in subscriptions:
+                channel_info = db.get_channel_by_id(sub["channel_id"])
+                channel_title = channel_info["title"] if channel_info else sub["channel_id"]
+                sub_text += f"✅ «{channel_title}» — до {sub['expires_at']}\n"
+            
+            sub_text += "\nВыберите действие:"
+            await message.answer(sub_text, reply_markup=subscriber_keyboard())
+        else:
+            await message.answer(
+                "👋 Привет!\n\n"
+                "Здесь вы можете получить доступ к закрытым каналам.\n"
+                "Выберите канал для подписки:",
+                reply_markup=subscriber_keyboard()
+            )
     else:
         await message.answer(
             "👋 Привет! Я ChiefBot — помощник для администраторов Telegram-каналов.\n\n"
@@ -511,10 +551,50 @@ async def subs_active_callback(callback: CallbackQuery):
         return
     
     for sub in active:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отозвать доступ", callback_data=f"revoke_sub:{channel_id}:{sub['user_id']}")]
+        ])
+        
         await callback.message.answer(
             f"✅ Подписчик: {sub['user_id']}\n"
-            f"Действует до: {sub['expires_at']}"
+            f"Действует до: {sub['expires_at']}",
+            reply_markup=keyboard
         )
+    
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("revoke_sub:"))
+async def revoke_sub_callback(callback: CallbackQuery):
+    """Отзыв доступа."""
+    parts = callback.data.split(":")
+    channel_id = parts[1]
+    user_id = parts[2]
+    
+    # Кикаем из канала
+    try:
+        import requests as r
+        url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/banChatMember"
+        response = r.post(url, json={
+            "chat_id": int(channel_id),
+            "user_id": int(user_id)
+        })
+        
+        if response.status_code == 200:
+            # Разбаниваем, чтобы мог вернуться
+            unban_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/unbanChatMember"
+            r.post(unban_url, json={
+                "chat_id": int(channel_id),
+                "user_id": int(user_id)
+            })
+            
+            # Обновляем статус в БД
+            db.mark_subscriber_expired(channel_id, user_id)
+            
+            await callback.message.answer(f"✅ Доступ отозван у пользователя {user_id}")
+        else:
+            await callback.message.answer(f"❌ Ошибка отзыва доступа: {response.text}")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {e}")
     
     await callback.answer()
 

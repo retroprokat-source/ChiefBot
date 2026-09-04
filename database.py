@@ -620,9 +620,10 @@ def get_pending_requests(channel_id: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
-        SELECT s.id, s.channel_id, s.user_id, s.created_at, c.title
+        SELECT s.id, s.channel_id, s.user_id, s.created_at, c.title, u.username
         FROM subscribers s
         JOIN channels c ON s.channel_id = c.id
+        LEFT JOIN users u ON s.user_id = u.id
         WHERE s.channel_id = ? AND s.status = 'pending'
         ORDER BY s.created_at DESC
     """, (channel_id,))

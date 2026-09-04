@@ -494,14 +494,25 @@ async def subscribers_button(message: Message):
         )
 
 
-async def show_subscribers_menu(message: Message, channel_id: str):
-    """Показывает меню подписчиков."""
+async def show_subscription_settings(message: Message, channel_id: str):
+    """Показывает текущие настройки подписки."""
+    settings = db.get_channel_subscription_settings(channel_id)
+    channel_info = db.get_channel_by_id(channel_id)
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏳ Заявки", callback_data=f"subs_pending:{channel_id}")],
-        [InlineKeyboardButton(text="✅ Активные", callback_data=f"subs_active:{channel_id}")],
-        [InlineKeyboardButton(text="⏰ Истёкшие", callback_data=f"subs_expired:{channel_id}")]
+        [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"set_sub_price:{channel_id}")],
+        [InlineKeyboardButton(text="🔗 Изменить ссылку", callback_data=f"set_sub_link:{channel_id}")],
+        [InlineKeyboardButton(text="📝 Изменить инструкцию", callback_data=f"set_sub_instr:{channel_id}")]
     ])
-    await message.answer("Выберите категорию:", reply_markup=keyboard)
+    
+    await message.answer(
+        f"⚙️ Настройки подписки для канала «{channel_title}»\n\n"
+        f"💰 Цена: {settings['price'] or 'не указана'}\n"
+        f"🔗 Ссылка: {settings['payment_link'] or 'не указана'}\n"
+        f"📝 Инструкция: {settings['instructions'] or 'не указана'}",
+        reply_markup=keyboard
+    )
 
 
 @router.callback_query(F.data.startswith("subs_channel:"))

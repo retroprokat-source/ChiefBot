@@ -702,3 +702,17 @@ def get_user_role(user_id: str):
     row = cur.fetchone()
     conn.close()
     return row[0] if row and row[0] else None
+
+# ---------------------------- Активные подписки пользователя ----------------------------
+
+def get_user_active_subscriptions(user_id: str):
+    """Возвращает активные подписки пользователя."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT channel_id, expires_at FROM subscribers
+        WHERE user_id = ? AND status = 'active' AND expires_at > datetime('now')
+    """, (user_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"channel_id": r[0], "expires_at": r[1]} for r in rows]

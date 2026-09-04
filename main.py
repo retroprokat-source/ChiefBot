@@ -15,6 +15,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 import config
 import database as db
+from datetime import datetime, timedelta
 import services.payments as payments_service
 import services.subscriptions as subscriptions_service
 import services.scheduler as scheduler_service
@@ -118,7 +119,16 @@ def tochka_webhook():
                     except Exception as e:
                         logging.error(f"❌ Ошибка отправки уведомления: {e}")
                 else:
-                    logging.error(f"❌ Нет channel_id в платеже {payment_link_id}")
+                    # Оплата тарифа
+                    purpose = payment["purpose"]
+                    if "Тариф Pro" in purpose:
+                        expires = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+                        db.update_user_plan(user_id, "pro", expires)
+                        logging.info(f"✅ Тариф Pro активирован для {user_id}")
+                    elif "Тариф Premium" in purpose:
+                        expires = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+                        db.update_user_plan(user_id, "premium", expires)
+                        logging.info(f"✅ Тариф Premium активирован для {user_id}")
             else:
                 logging.error(f"❌ Платёж не найден: {payment_link_id}")
         else:
@@ -245,14 +255,73 @@ async def profile_button(message: Message):
     
     role_text = "Администратор" if role == "admin" or channels else "Подписчик"
     
+    keyboard = None
+    if plan == "free":
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬆️ Повысить тариф", callback_data="upgrade_plan")]
+        ])
+    
     await message.answer(
         f"👤 Ваш профиль\n\n"
         f"Роль: {role_text}\n"
         f"Тариф: {plan.upper()}\n"
         f"Действует до: {plan_expires or 'бессрочно'}\n"
         f"Каналов: {limits['current_channels']} / {limits['allowed_channels']}\n"
-        f"Постов: {limits['current_posts']} / {limits['allowed_posts']}"
+        f"Постов: {limits['current_posts']} / {limits['allowed_posts']}",
+        reply_markup=keyboard
     )
+
+@router.callback_query(F.data == "upgrade_plan")
+async def upgrade_plan_callback(callback: CallbackQuery):
+    """Выбор тарифа."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Pro — 990 ₽/мес", callback_data="pay_plan:pro")],
+        [InlineKeyboardButton(text="Premium — 2490 ₽/мес", callback_data="pay_plan:premium")]
+    ])
+    
+    await callback.message.answer(
+        "⬆️ Выберите тариф:\n\n"
+        "Pro — 5 каналов, 100 постов/мес, безлимит ИИ\n"
+        "Premium — 20 каналов, безлимит постов, аналитика, API",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("pay_plan:"))
+async def pay_plan_callback(callback: CallbackQuery):
+    """Создание платежа за тариф."""
+    plan = callback.data.split(":")[1]
+    user_id = str(callback.from_user.id)
+    
+    if plan == "pro":
+        amount = "990.00"
+        purpose = "Тариф Pro на 30 дней"
+        days = 30
+    else:
+        amount = "2490.00"
+        purpose = "Тариф Premium на 30 дней"
+        days = 30
+    
+    payment_url = payments_service.create_payment_link(
+        user_id=user_id,
+        channel_id="",
+        amount=amount,
+        purpose=purpose
+    )
+    
+    if payment_url:
+        # Сохраняем план для активации после оплаты
+        await callback.message.answer(
+            f"💳 Оплата тарифа\n"
+            f"Тариф: {plan.upper()}\n"
+            f"Цена: {amount} ₽\n"
+            f"Длительность: {days} дней\n\n"
+            f"Оплатите по ссылке:\n{payment_url}"
+        )
+    else:
+        await callback.message.answer("❌ Ошибка создания платежа.")
+    
+    await callback.answer()
 
 # ---------------------------- Обработчик команды /start ----------------------------
 @router.message(CommandStart())

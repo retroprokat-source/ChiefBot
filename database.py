@@ -28,7 +28,10 @@ def init_db():
             title TEXT,
             username TEXT,
             verified BOOLEAN DEFAULT 0,
-            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            subscription_price TEXT DEFAULT NULL,
+            payment_link TEXT DEFAULT NULL,
+            payment_instructions TEXT DEFAULT NULL
         )
     """)
 
@@ -112,6 +115,16 @@ def migrate():
         cur.execute("ALTER TABLE subscribers ADD COLUMN notified_3d BOOLEAN DEFAULT 0")
     if "notified_1d" not in columns:
         cur.execute("ALTER TABLE subscribers ADD COLUMN notified_1d BOOLEAN DEFAULT 0")
+
+    # Добавляем поля настроек подписки в channels
+    cur.execute("PRAGMA table_info(channels)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "subscription_price" not in columns:
+        cur.execute("ALTER TABLE channels ADD COLUMN subscription_price TEXT DEFAULT NULL")
+    if "payment_link" not in columns:
+        cur.execute("ALTER TABLE channels ADD COLUMN payment_link TEXT DEFAULT NULL")
+    if "payment_instructions" not in columns:
+        cur.execute("ALTER TABLE channels ADD COLUMN payment_instructions TEXT DEFAULT NULL")
 
     conn.commit()
     conn.close()
@@ -513,3 +526,63 @@ def update_draft_status(draft_id: int, status: str = "posted"):
     cur.execute("UPDATE posts SET status = ? WHERE id = ?", (status, draft_id))
     conn.commit()
     conn.close()
+
+# ---------------------------- Настройки подписки канала ----------------------------
+
+def update_channel_subscription_settings(channel_id: str, price: str = None, payment_link: str = None, instructions: str = None):
+    """Обновляет настройки подписки канала."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    
+    if price is not None:
+        cur.execute("UPDATE channels SET subscription_price = ? WHERE id = ?", (price, channel_id))
+    if payment_link is not None:
+        cur.execute("UPDATE channels SET payment_link = ? WHERE id = ?", (payment_link, channel_id))
+    if instructions is not None:
+        cur.execute("UPDATE channels SET payment_instructions = ? WHERE id = ?", (instructions, channel_id))
+    
+    conn.commit()
+    conn.close()
+
+
+def get_channel_subscription_settings(channel_id: str):
+    """Возвращает настройки подписки канала."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT subscription_price, payment_link, payment_instructions
+        FROM channels WHERE id = ?
+    """, (channel_id,))
+    row = cur.fetchone()
+    conn.close()
+    
+    if row:
+        return {
+            "price": row[0],
+            "payment_link": row[1],
+            "instructions": row[2]
+        }
+    return {"price": None, "payment_link": None, "instructions": None}
+
+
+def get_all_channels_for_subscribe():
+    """Возвращает все верифицированные каналы с настройками подписки."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, title, subscription_price, payment_link, payment_instructions
+        FROM channels
+        WHERE verified = 1 AND subscription_price IS NOT NULL
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "price": r[2],
+            "payment_link": r[3],
+            "instructions": r[4]
+        }
+        for r in rows
+    ]

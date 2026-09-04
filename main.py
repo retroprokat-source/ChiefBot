@@ -54,7 +54,6 @@ def home():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
-    payments_service.setup_webhook()
     app.run(host="0.0.0.0", port=port)
     
 @app.route('/webhook/tochka', methods=['GET', 'POST'])
@@ -168,6 +167,7 @@ def admin_keyboard():
         [KeyboardButton(text="📂 Черновики")],
         [KeyboardButton(text="👥 Подписчики")],
         [KeyboardButton(text="⚙️ Настройка подписки")],
+        [KeyboardButton(text="📊 Статистика")],
         [KeyboardButton(text="🎁 Промокод")],
         [KeyboardButton(text="✨ ИИ-хештеги"), KeyboardButton(text="💡 Идеи для постов")],
         [KeyboardButton(text="💬 Сообщество админов")]
@@ -637,6 +637,12 @@ async def sub_instructions_entered(message: Message, state: FSMContext):
     await state.clear()
     await show_subscription_settings(message, channel_id)
 
+# ---------------------------- Статистика (кнопка) ----------------------------
+@router.message(F.text == "📊 Статистика")
+async def stats_button(message: Message):
+    """Кнопка статистики."""
+    await cmd_stats(message)
+
 # ---------------------------- Добавление канала ----------------------------
 @router.message(F.text == "➕ Добавить канал")
 async def add_channel_start(message: Message, state: FSMContext):
@@ -902,14 +908,20 @@ async def process_schedule_time(message: Message, state: FSMContext):
     from datetime import datetime, timedelta
 
     # Если нажата кнопка меню — сбрасываем состояние и переходим
-    if message.text in ("➕ Добавить канал", "📝 Новый пост", "💳 Подписка", "🎁 Промокод", "✨ ИИ-хештеги", "💡 Идеи для постов", "💬 Сообщество админов"):
+    if message.text in ("➕ Добавить канал", "📝 Новый пост", "📂 Черновики", "👥 Подписчики", "⚙️ Настройка подписки", "💳 Подписаться", "🎁 Промокод", "✨ ИИ-хештеги", "💡 Идеи для постов", "💬 Сообщество админов"):
         await state.clear()
         # Перенаправляем на нужный обработчик
         if message.text == "➕ Добавить канал":
             await add_channel_start(message, state)
         elif message.text == "📝 Новый пост":
             await new_post_start(message, state)
-        elif message.text == "💳 Подписка":
+        elif message.text == "📂 Черновики":
+            await drafts_list(message)
+        elif message.text == "👥 Подписчики":
+            await subscribers_button(message)
+        elif message.text == "⚙️ Настройка подписки":
+            await subscription_settings_start(message, state)
+        elif message.text == "💳 Подписаться":
             await subscribe_button(message)
         elif message.text == "🎁 Промокод":
             await promo_info(message)
@@ -1001,6 +1013,38 @@ async def cmd_set_timezone(message: Message, state: FSMContext):
     await state.set_state(TimezoneSetup.waiting_for_timezone)
     await state.update_data(planning_post=False)
 
+# ---------------------------- Статистика ----------------------------
+@router.message(Command("stats"))
+async def cmd_stats(message: Message):
+    """Базовая статистика по каналам."""
+    user_id = str(message.from_user.id)
+    channels = db.get_user_channels(user_id)
+    
+    if not channels:
+        await message.answer("❌ У вас нет подключённых каналов.")
+        return
+    
+    for ch in channels:
+        channel_id = ch["id"]
+        active_subs = db.get_active_subscribers(channel_id)
+        expired_subs = db.get_expired_subscribers_by_channel(channel_id)
+        pending_subs = db.get_pending_requests(channel_id)
+        
+        # Считаем посты
+        conn = sqlite3.connect(db.DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM posts WHERE channel_id = ? AND status = 'posted'", (channel_id,))
+        posts_count = cur.fetchone()[0]
+        conn.close()
+        
+        await message.answer(
+            f"📊 Статистика канала «{ch['title']}»\n\n"
+            f"📝 Постов опубликовано: {posts_count}\n"
+            f"✅ Активных подписчиков: {len(active_subs)}\n"
+            f"⏰ Истёкших: {len(expired_subs)}\n"
+            f"⏳ Заявок: {len(pending_subs)}"
+        )
+
 # ---------------------------- Мои каналы ----------------------------
 @router.message(Command("my_channels"))
 async def cmd_my_channels(message: Message):
@@ -1046,9 +1090,100 @@ async def delete_channel_callback(callback: CallbackQuery):
     await callback.message.answer("✅ Канал удалён.")
     await callback.answer()
 
+# ---------------------------- Подписка (для подписчика) ----------------------------
+@router.message(F.text == "💳 Подписаться")
+async def subscribe_button(message: Message):
+    """Кнопка Подписаться для подписчика."""
+    channels = db.get_all_channels_for_subscribe()
+    
+    if not channels:
+        await message.answer("Пока нет доступных каналов для подписки.")
+        return
+    
+    if len(channels) == 1:
+        await show_subscription_info(message, channels[0])
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=ch["title"], callback_data=f"sub_info:{ch['id']}")]
+            for ch in channels
+        ])
+        await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
+
+
+async def show_subscription_info(message: Message, channel):
+    """Показывает информацию о подписке."""
+    price = channel.get("price") or "не указана"
+    payment_link = channel.get("payment_link") or "не указана"
+    instructions = channel.get("instructions") or "Оплатите и нажмите «Я оплатил»."
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"i_paid:{channel['id']}")]
+    ])
+    
+    await message.answer(
+        f"💳 Подписка на канал «{channel['title']}»\n\n"
+        f"💰 Стоимость: {price}\n"
+        f"🔗 Оплата: {payment_link}\n\n"
+        f"📝 Инструкция:\n{instructions}",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("sub_info:"))
+async def sub_info_callback(callback: CallbackQuery):
+    """Показывает информацию о канале."""
+    channel_id = callback.data.split(":")[1]
+    channels = db.get_all_channels_for_subscribe()
+    channel = next((ch for ch in channels if ch["id"] == channel_id), None)
+    
+    if channel:
+        await show_subscription_info(callback.message, channel)
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("i_paid:"))
+async def i_paid_callback(callback: CallbackQuery):
+    """Подписчик нажал «Я оплатил»."""
+    channel_id = callback.data.split(":")[1]
+    user_id = str(callback.from_user.id)
+    username = callback.from_user.username
+    
+    # Сохраняем заявку
+    db.add_subscription_request(channel_id, user_id, username)
+    
+    await callback.message.answer(
+        "✅ Заявка отправлена администратору.\n"
+        "После проверки оплаты вам придёт уведомление с доступом."
+    )
+    
+    # Уведомляем админа
+    channel_info = db.get_channel_by_id(channel_id)
+    owner_id = channel_info["owner_id"] if channel_info else None
+    channel_title = channel_info["title"] if channel_info else channel_id
+    
+    if owner_id:
+        try:
+            telegram_url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+            import requests as r
+            r.post(telegram_url, json={
+                "chat_id": int(owner_id),
+                "text": (
+                    f"🔔 Заявка на подписку\n\n"
+                    f"Пользователь: @{username or 'без username'}\n"
+                    f"Канал: «{channel_title}»\n\n"
+                    f"Проверьте оплату и выдайте доступ в разделе «👥 Подписчики»."
+                )
+            })
+        except Exception as e:
+            logging.error(f"❌ Ошибка уведомления админа: {e}")
+    
+    await callback.answer()
+
 # ---------------------------- Подписка на канал ----------------------------
 @router.message(Command("subscribe"))
 async def cmd_subscribe(message: Message):
+    """Команда подписки для админа (просмотр)."""
     user_id = str(message.from_user.id)
     channels = db.get_user_channels(user_id)
     
@@ -1056,38 +1191,14 @@ async def cmd_subscribe(message: Message):
         await message.answer("❌ У вас нет подключённых каналов. Сначала добавьте канал.")
         return
     
-    if len(channels) == 1:
-        channel_id = channels[0]["id"]
-        channel_title = channels[0]["title"]
-        
-        existing = db.get_user_subscription(user_id, channel_id)
-        if existing:
-            await message.answer(
-                f"✅ У вас уже есть активная подписка на канал «{channel_title}».\n"
-                f"Действует до: {existing}"
-            )
-            return
-        
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="1 ₽", callback_data=f"sub_price:{channel_id}:1"),
-             InlineKeyboardButton(text="5 ₽", callback_data=f"sub_price:{channel_id}:5")],
-            [InlineKeyboardButton(text="10 ₽", callback_data=f"sub_price:{channel_id}:10"),
-             InlineKeyboardButton(text="50 ₽", callback_data=f"sub_price:{channel_id}:50")],
-            [InlineKeyboardButton(text="100 ₽", callback_data=f"sub_price:{channel_id}:100")],
-            [InlineKeyboardButton(text="✏️ Своя цена", callback_data=f"custom_price:{channel_id}")]
-        ])
-        
+    # Показываем информацию о подписках на каналы
+    for ch in channels:
+        settings = db.get_channel_subscription_settings(ch["id"])
         await message.answer(
-            f"💳 Подписка на канал «{channel_title}»\n\n"
-            "Выберите цену подписки:",
-            reply_markup=keyboard
+            f"Канал: {ch['title']}\n"
+            f"Цена: {settings['price'] or 'не указана'}\n"
+            f"Ссылка: {settings['payment_link'] or 'не указана'}"
         )
-    else:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=ch["title"], callback_data=f"subscribe_channel:{ch['id']}")]
-            for ch in channels
-        ])
-        await message.answer("Выберите канал для подписки:", reply_markup=keyboard)
 
 @router.callback_query(F.data.startswith("subscribe_channel:"))
 async def subscribe_channel_callback(callback: CallbackQuery):

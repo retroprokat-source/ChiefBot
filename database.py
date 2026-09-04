@@ -17,7 +17,8 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             plan TEXT DEFAULT 'free',
             plan_expires DATE,
-            timezone TEXT DEFAULT NULL
+            timezone TEXT DEFAULT NULL,
+            role TEXT DEFAULT NULL
         )
     """)
 
@@ -125,6 +126,12 @@ def migrate():
         cur.execute("ALTER TABLE channels ADD COLUMN payment_link TEXT DEFAULT NULL")
     if "payment_instructions" not in columns:
         cur.execute("ALTER TABLE channels ADD COLUMN payment_instructions TEXT DEFAULT NULL")
+
+    # Добавляем role в users
+    cur.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cur.fetchall()]
+    if "role" not in columns:
+        cur.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT NULL")
 
     conn.commit()
     conn.close()
@@ -668,3 +675,23 @@ def get_expired_subscribers_by_channel(channel_id: str):
     rows = cur.fetchall()
     conn.close()
     return [{"user_id": r[0], "expires_at": r[1]} for r in rows]
+
+# ---------------------------- Роли пользователей ----------------------------
+
+def set_user_role(user_id: str, role: str):
+    """Сохраняет роль пользователя."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_role(user_id: str):
+    """Возвращает роль пользователя или None."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None

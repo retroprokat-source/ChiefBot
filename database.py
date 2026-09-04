@@ -586,3 +586,85 @@ def get_all_channels_for_subscribe():
         }
         for r in rows
     ]
+
+# ---------------------------- Заявки на подписку ----------------------------
+
+def add_subscription_request(channel_id: str, user_id: str, username: str = None):
+    """Добавляет заявку на подписку."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO subscribers (channel_id, user_id, status, created_at)
+        VALUES (?, ?, 'pending', CURRENT_TIMESTAMP)
+    """, (channel_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_requests(channel_id: str):
+    """Возвращает заявки на подписку со статусом pending."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT s.id, s.channel_id, s.user_id, s.created_at, c.title
+        FROM subscribers s
+        JOIN channels c ON s.channel_id = c.id
+        WHERE s.channel_id = ? AND s.status = 'pending'
+        ORDER BY s.created_at DESC
+    """, (channel_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "channel_id": r[1],
+            "user_id": r[2],
+            "created_at": r[3],
+            "channel_title": r[4]
+        }
+        for r in rows
+    ]
+
+
+def approve_subscription_request(request_id: int):
+    """Одобряет заявку и возвращает данные."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id, user_id FROM subscribers WHERE id = ? AND status = 'pending'", (request_id,))
+    row = cur.fetchone()
+    
+    if not row:
+        conn.close()
+        return None
+    
+    channel_id = row[0]
+    user_id = row[1]
+    expires_at = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    cur.execute("UPDATE subscribers SET status = 'active', expires_at = ? WHERE id = ?", (expires_at, request_id))
+    conn.commit()
+    conn.close()
+    
+    return {"channel_id": channel_id, "user_id": user_id, "expires_at": expires_at}
+
+
+def reject_subscription_request(request_id: int):
+    """Отклоняет заявку."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("UPDATE subscribers SET status = 'rejected' WHERE id = ?", (request_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_expired_subscribers_by_channel(channel_id: str):
+    """Возвращает истёкших подписчиков канала."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT user_id, expires_at FROM subscribers
+        WHERE channel_id = ? AND status = 'expired'
+    """, (channel_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [{"user_id": r[0], "expires_at": r[1]} for r in rows]

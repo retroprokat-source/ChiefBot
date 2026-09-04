@@ -717,8 +717,17 @@ async def stats_button(message: Message):
 @router.message(Command("add_channel"))
 async def cmd_add_channel(message: Message, state: FSMContext):
     """Команда добавления канала."""
-    await add_channel_start(message, state)
-    """Начало процесса добавления канала."""
+    await message.answer(
+        "Чтобы добавить канал, выполните два шага:\n"
+        "1. Добавьте меня в администраторы вашего канала (с правами на публикацию).\n"
+        "2. Перешлите сюда любое сообщение из этого канала.\n\n"
+        "Пересылайте сообщение прямо сейчас."
+    )
+    await state.set_state(AddChannel.waiting_for_forward)
+
+@router.message(F.text == "➕ Добавить канал")
+async def add_channel_start(message: Message, state: FSMContext):
+    """Кнопка добавления канала."""
     await message.answer(
         "Чтобы добавить канал, выполните два шага:\n"
         "1. Добавьте меня в администраторы вашего канала (с правами на публикацию).\n"
